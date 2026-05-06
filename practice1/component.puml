@@ -1,0 +1,68 @@
+@startuml
+!include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Component.puml
+
+LAYOUT_TOP_DOWN()
+LAYOUT_WITH_LEGEND()
+
+title Диаграмма компонентов — Anti-Fraud Service
+
+ContainerDb(redis, "Redis", "In-Memory Store", "Кэш статусов опросов и гео-проверок. Счётчики результатов и множество проголосовавших IP. Скользящие окна Rate Limiting")
+
+Container(poll_manager, "Poll Manager Service", "Go", "Предоставляет статус и конфигурацию опроса при промахе кэша Redis")
+
+ContainerQueue(broker, "Message Broker", "NATS", "Доставляет события VoteRequested от Gateway")
+
+System_Ext(geoip_api, "GeoIP API", "Внешний сервис верификации IP. Определяет residential, data center или VPN")
+
+System_Boundary(antifraud_service, "Anti-Fraud Service") {
+
+    Component(nats_consumer, "NATS Consumer", "Go / NATS Client", "Подписан на очередь votes.new (Consumer Group). При получении события VoteRequested запускает цепочку проверок")
+
+    Component(status_checker, "Status Checker", "Go", "Проверяет статус опроса")
+
+    Component(geoip_checker, "GeoIP Checker", "Go", "Проверяет тип IP-адреса")
+
+    Component(deduplicator, "Deduplicator", "Go", "Проверяет, голосовал ли IP в этом опросе.")
+
+    Component(rate_limiter, "Rate Limiter", "Go", "Проверяет частоту голосов с одного IP. Отклоняет при превышении лимита")
+
+    Component(vote_recorder, "Vote Recorder", "Go", "Инкрементирует счётчик варианта ответа")
+
+}
+
+' =======================
+' === Связи =============
+' =======================
+
+' NATS -> Consumer
+Rel(broker, nats_consumer, "Доставляет VoteRequested", "NATS Sub")
+
+' Consumer -> цепочка проверок
+Rel(nats_consumer, status_checker, "Вызывает проверку статуса опроса", "Go method call")
+Rel(status_checker, geoip_checker, "Статус active → вызывает гео-проверку", "Go method call")
+Rel(geoip_checker, deduplicator, "IP residential → вызывает дедупликацию", "Go method call")
+Rel(deduplicator, rate_limiter, "IP не голосовал → вызывает Rate Limiting", "Go method call")
+Rel(rate_limiter, vote_recorder, "Лимит не превышен → инкрементирует счётчик", "Go method call")
+
+' Status Checker -> Redis
+Rel(status_checker, redis, "Читает статус опроса", "TCP/Redis")
+
+' Status Checker -> Poll Manager (fallback)
+Rel(status_checker, poll_manager, "Запрашивает статус и конфигурацию опроса при промахе кэша", "gRPC")
+
+' GeoIP Checker -> Redis
+Rel(geoip_checker, redis, "Читает гео-информацию. Сохраняет результат с TTL 24h", "TCP/Redis")
+
+' GeoIP Checker -> GeoIP API
+Rel(geoip_checker, geoip_api, "Проверяет тип IP при промахе кэша", "HTTPS")
+
+' Deduplicator -> Redis
+Rel(deduplicator, redis, "Проверяет наличие голоса по IP", "TCP/Redis")
+
+' Rate Limiter -> Redis
+Rel(rate_limiter, redis, "Обрабатывает счетчик запросов", "TCP/Redis")
+
+' Vote Recorder -> Redis
+Rel(vote_recorder, redis, "Увеличивает счетчик голосов у варианта", "TCP/Redis")
+
+@enduml

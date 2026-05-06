@@ -1,0 +1,63 @@
+@startuml
+!include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Container.puml
+
+LAYOUT_TOP_DOWN()
+LAYOUT_WITH_LEGEND()
+
+title Диаграмма контейнеров — API голосования с защитой от накрутки
+
+Person(user, "Пользователь", "Участник голосования или администратор, создающий опросы")
+
+System_Boundary(voting_system, "Voting API System") {
+
+    Container(gateway, "Gateway Service", "Go / Chi", "Единая точка входа. Принимает REST-запросы, проверяет API-ключи, применяет первичный Rate Limiting. Публикует события голосования в очередь")
+
+    Container(poll_manager, "Poll Manager Service", "Go / Chi", "CRUD-операции над опросами. Хранит конфигурации и API-ключи в PostgreSQL. Кэширует статус опроса в Redis при создании и закрытии. Предоставляет верифицированные результаты")
+
+    Container(antifraud, "Anti-Fraud Service", "Go", "Асинхронная обработка голосов. Проверяет статус опроса. Выполняет гео-проверку IP, дедупликацию, Rate Limiting. Инкрементирует счётчики легитимных голосов")
+
+    ContainerQueue(broker, "Message Broker", "NATS", "Асинхронная очередь сообщений. Принимает события VoteRequested от Gateway, доставляет в Anti-Fraud Service через Consumer Group")
+
+}
+
+System_Ext(geoip_api, "GeoIP API", "Внешний сервис верификации IP. Определяет residential, data center или VPN")
+
+ContainerDb(redis, "Redis", "In-Memory Store", "Кэш статусов опросов, кэш гео-проверок, множество проголосовавших IP, счётчики результатов, скользящие окна Rate Limiting")
+
+ContainerDb(postgres, "PostgreSQL", "Реляционная БД", "Хранение метаданных опросов, вариантов ответов и API-ключей администраторов и результатов опросов")
+
+' =======================
+' === Связи =============
+' =======================
+
+' Пользователь -> Gateway
+Rel(user, gateway, "Создаёт опросы, голосует, запрашивает статус голоса и результаты", "REST/HTTPS")
+
+' Gateway -> Poll Manager
+Rel(gateway, poll_manager, "Проксирует CRUD опросов и запросы результатов", "gRPC")
+
+' Gateway -> NATS
+Rel(gateway, broker, "Публикует событие VoteRequested", "NATS Pub")
+
+' NATS -> Anti-Fraud
+Rel(broker, antifraud, "Доставляет VoteRequested (Consumer Group)", "NATS Sub")
+
+' Anti-Fraud -> Poll Manager (fallback при промахе кэша статуса)
+Rel(antifraud, poll_manager, "Запрашивает статус и конфигурацию опроса при промахе кэша Redis", "gRPC")
+
+' Anti-Fraud -> GeoIP
+Rel(antifraud, geoip_api, "Проверяет тип IP (residential / data center / VPN)", "HTTPS")
+
+' Gateway -> Redis
+Rel(gateway, redis, "Первичный Rate Limiting", "TCP/Redis")
+
+' Anti-Fraud -> Redis
+Rel(antifraud, redis, "Читает статус опроса (быстрый путь). Кэш гео-проверок. Дедупликация. Rate Limiting голосов. Инкремент счётчиков", "TCP/Redis")
+
+' Poll Manager -> Redis
+Rel(poll_manager, redis, "Кэширует статус опроса при создании/закрытии (active/closed). Читает счётчики результатов для выдачи пользователям", "TCP/Redis")
+
+' Poll Manager -> PostgreSQL
+Rel(poll_manager, postgres, "Сохраняет и читает опросы, варианты ответов, API-ключи", "TCP/PostgreSQL")
+
+@enduml

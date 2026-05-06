@@ -1,0 +1,23 @@
+@startuml
+!include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Context.puml
+
+LAYOUT_WITH_LEGEND()
+
+title Контекстная диаграмма — API голосования с защитой от накрутки
+
+Person(user, "Пользователь", "Участник голосования или администратор, создающий опросы")
+
+System(voting_api, "Voting API System", "Предоставляет REST API для создания опросов, приёма голосов и получения результатов с защитой от автоматических накруток")
+
+System_Ext(geoip_api, "GeoIP API", "Внешний сервис для верификации типа IP-адреса. Определяет принадлежность к домашним провайдерам, дата-центрам или VPN")
+
+SystemDb_Ext(redis, "Redis", "In-memory хранилище для дедупликации голосов, ограничения частоты запросов и хранения результатов")
+
+SystemDb_Ext(postgres, "PostgreSQL", "Реляционная база данных для хранения конфигураций опросов и API-ключей администраторов")
+
+Rel(user, voting_api, "Создаёт опросы, голосует, запрашивает результаты", "REST/HTTPS")
+Rel(voting_api, geoip_api, "Проверяет тип IP-адреса (residential / data center / VPN)", "HTTPS")
+Rel(voting_api, redis, "Хранит кэш гео-проверок, счётчики голосов, множество проголосовавших IP, лимиты частоты", "TCP/Redis Protocol")
+Rel(voting_api, postgres, "Сохраняет и читает опросы, варианты ответов, API-ключи", "TCP/PostgreSQL")
+
+@enduml
