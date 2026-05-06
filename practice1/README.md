@@ -14,7 +14,7 @@
 
 **Диаграмма:**
 
-![Context Diagram](practice1/context.png)
+![Context Diagram](context.png)
 
 ### 2. Container Diagram (Диаграмма контейнеров)
 
@@ -22,7 +22,7 @@
 
 **Диаграмма:**
 
-![Container Diagram](practice1/container.png)
+![Container Diagram](container.png)
 
 ### 3. Component Diagram (Диаграмма компонентов)
 
@@ -30,7 +30,7 @@
 
 **Диаграмма:**
 
-![Component Diagram](practice1/component.png)
+![Component Diagram](component.png)
 
 ## Итоги
 
