@@ -1,0 +1,144 @@
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: voting-postgres
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: voting
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - voting-network
+
+  redis:
+    image: redis:latest
+    container_name: voting-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - voting-network
+
+  nats:
+    image: nats:2.14
+    container_name: voting-nats
+    ports:
+      - "4222:4222"
+      - "8222:8222"
+    command: -m 8222
+    healthcheck:
+      test: ["CMD", "nats-server", "-V"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - voting-network
+
+  gateway:
+    build:
+      context: .
+      dockerfile: Dockerfile.gateway
+    container_name: voting-gateway
+    restart: unless-stopped
+    environment:
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      DB_USER: postgres
+      DB_PASSWORD: postgres
+      DB_NAME: voting
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      NATS_URL: nats://nats:4222
+      GATEWAY_PORT: "8001"
+      POLL_MANAGER_PORT: "8002"
+      ANTI_FRAUD_PORT: "8003"
+      GEOIP_API_URL: https://api.ipapi.is
+      GEOIP_API_KEY: d59a6d66c3673ba3b079
+    ports:
+      - "8001:8001"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      nats:
+        condition: service_started
+    networks:
+      - voting-network
+
+  poll-manager:
+    build:
+      context: .
+      dockerfile: Dockerfile.poll-manager
+    container_name: voting-poll-manager
+    restart: unless-stopped
+    environment:
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      DB_USER: postgres
+      DB_PASSWORD: postgres
+      DB_NAME: voting
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      POLL_MANAGER_PORT: "8002"
+    ports:
+      - "8002:8002"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - voting-network
+
+  anti-fraud:
+    build:
+      context: .
+      dockerfile: Dockerfile.anti-fraud
+    container_name: voting-anti-fraud
+    restart: unless-stopped
+    environment:
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      DB_USER: postgres
+      DB_PASSWORD: postgres
+      DB_NAME: voting
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      NATS_URL: nats://nats:4222
+      ANTI_FRAUD_PORT: "8003"
+      GEOIP_API_URL: https://api.ipapi.is
+      GEOIP_API_KEY: d59a6d66c3673ba3b079
+    ports:
+      - "8003:8003"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      nats:
+        condition: service_started
+    networks:
+      - voting-network
+
+volumes:
+  postgres_data:
+  redis_data:
+
+networks:
+  voting-network:
+    driver: bridge

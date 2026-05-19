@@ -1,0 +1,37 @@
+# Go caches
+.gocache/
+.gomodcache/
+go.work
+go.work.sum
+
+# Build and coverage output
+build/
+dist/
+bin/
+coverage/
+*.out
+*.test
+*.prof
+cov.out
+coverage.out
+
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# IDE and OS files
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# Logs and temp files
+*.log
+logs/
+tmp/
+temp/
+*.tmp
