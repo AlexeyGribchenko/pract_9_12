@@ -1,98 +1,66 @@
 package handler
 
 import (
+	"bytes"
 	"encoding/json"
+	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"voting-app/models"
-	"voting-app/service"
 
 	"github.com/go-chi/chi/v5"
 )
 
+// HTTPClient интерфейс для мокания HTTP-запросов
+type HTTPClient interface {
+	Do(req *http.Request) (*http.Response, error)
+	Get(url string) (*http.Response, error)
+}
+
 type GatewayHandler struct {
-	pollService *service.PollService
-	publisher   VotePublisher
+	pollManagerURL string
+	publisher      VotePublisher
+	httpClient     HTTPClient
 }
 
 type VotePublisher interface {
 	PublishVote(event models.VoteEventMessage) error
 }
 
-func NewGatewayHandler(pollService *service.PollService) *GatewayHandler {
+func NewGatewayHandler(pollManagerURL string) *GatewayHandler {
 	return &GatewayHandler{
-		pollService: pollService,
+		pollManagerURL: pollManagerURL,
+		httpClient:     &http.Client{},
 	}
+}
+
+// SetHTTPClient позволяет установить мок-клиент для тестов
+func (gh *GatewayHandler) SetHTTPClient(client HTTPClient) {
+	gh.httpClient = client
 }
 
 func (gh *GatewayHandler) SetVotePublisher(publisher VotePublisher) {
 	gh.publisher = publisher
 }
 
-// CreatePoll обработчик для создания опроса
+// CreatePoll - проксируем запрос в Poll Manager
 func (gh *GatewayHandler) CreatePoll(w http.ResponseWriter, r *http.Request) {
-	var req models.CreatePollRequest
-
-	err := json.NewDecoder(r.Body).Decode(&req)
-	if err != nil {
-		http.Error(w, "Invalid request", http.StatusBadRequest)
-		return
-	}
-
-	if req.Title == "" || len(req.Options) == 0 {
-		http.Error(w, "Title and options are required", http.StatusBadRequest)
-		return
-	}
-
-	resp, err := gh.pollService.CreatePoll(req.Title, req.Options)
-	if err != nil {
-		log.Printf("Error creating poll: %v", err)
-		http.Error(w, "Error creating poll", http.StatusInternalServerError)
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(resp)
+	gh.proxyRequest(w, r, "POST", gh.pollManagerURL+"/polls")
 }
 
-// GetPoll обработчик для получения информации об опросе
+// GetPoll - проксируем запрос в Poll Manager
 func (gh *GatewayHandler) GetPoll(w http.ResponseWriter, r *http.Request) {
 	pollID := chi.URLParam(r, "pollID")
-
-	poll, options, err := gh.pollService.GetPollWithOptions(pollID)
-	if err != nil {
-		log.Printf("Error getting poll: %v", err)
-		http.Error(w, "Error getting poll", http.StatusInternalServerError)
-		return
-	}
-
-	if poll == nil {
-		http.Error(w, "Poll not found", http.StatusNotFound)
-		return
-	}
-
-	// Возвращаем опрос с вариантами ответов
-	pollWithOptions := models.PollWithOptions{
-		ID:        poll.ID,
-		Title:     poll.Title,
-		Status:    poll.Status,
-		CreatedAt: poll.CreatedAt,
-		ClosedAt:  poll.ClosedAt,
-		Options:   options,
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(pollWithOptions)
+	gh.proxyRequest(w, r, "GET", fmt.Sprintf("%s/polls/%s", gh.pollManagerURL, pollID))
 }
 
-// Vote обработчик для голосования
+// Vote - особая логика: публикуем в NATS
 func (gh *GatewayHandler) Vote(w http.ResponseWriter, r *http.Request) {
 	pollID := chi.URLParam(r, "pollID")
 
 	var req models.VoteRequest
-	err := json.NewDecoder(r.Body).Decode(&req)
-	if err != nil {
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "Invalid request", http.StatusBadRequest)
 		return
 	}
@@ -102,31 +70,32 @@ func (gh *GatewayHandler) Vote(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Получить IP адрес клиента
-	ip := GetClientIP(r)
-	log.Printf("Vote request from IP: %s for poll: %s, option: %s", ip, pollID, req.OptionID)
-
-	poll, err := gh.pollService.GetPoll(pollID)
+	// Проверяем статус опроса через Poll Manager
+	poll, err := gh.getPollStatus(pollID)
 	if err != nil {
-		log.Printf("Error getting poll: %v", err)
+		log.Printf("Error checking poll status: %v", err)
 		http.Error(w, "Error checking poll", http.StatusInternalServerError)
 		return
 	}
+
 	if poll == nil {
 		http.Error(w, "Poll not found", http.StatusNotFound)
 		return
 	}
+
 	if poll.Status != "active" {
 		http.Error(w, "Poll is not active", http.StatusBadRequest)
 		return
 	}
 
+	// Публикуем голос в NATS
 	voteEvent := models.VoteEventMessage{
 		PollID:    pollID,
 		OptionID:  req.OptionID,
-		IP:        ip,
+		IP:        GetClientIP(r),
 		UserAgent: r.UserAgent(),
 	}
+
 	if gh.publisher != nil {
 		if err := gh.publisher.PublishVote(voteEvent); err != nil {
 			log.Printf("Error publishing vote event: %v", err)
@@ -142,57 +111,19 @@ func (gh *GatewayHandler) Vote(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// GetResults обработчик для получения результатов
+// GetResults - проксируем в Poll Manager
 func (gh *GatewayHandler) GetResults(w http.ResponseWriter, r *http.Request) {
 	pollID := chi.URLParam(r, "pollID")
-
-	results, err := gh.pollService.GetResults(pollID)
-	if err != nil {
-		log.Printf("Error getting results: %v", err)
-		http.Error(w, "Error getting results", http.StatusInternalServerError)
-		return
-	}
-
-	if results == nil {
-		http.Error(w, "Poll not found", http.StatusNotFound)
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(results)
+	gh.proxyRequest(w, r, "GET", fmt.Sprintf("%s/polls/%s/results", gh.pollManagerURL, pollID))
 }
 
-// ClosePoll обработчик для закрытия опроса
+// ClosePoll - проксируем в Poll Manager
 func (gh *GatewayHandler) ClosePoll(w http.ResponseWriter, r *http.Request) {
 	pollID := chi.URLParam(r, "pollID")
-
-	var req models.ClosePollRequest
-	err := json.NewDecoder(r.Body).Decode(&req)
-	if err != nil {
-		http.Error(w, "Invalid request", http.StatusBadRequest)
-		return
-	}
-
-	if req.AdminKey == "" {
-		http.Error(w, "admin_key is required", http.StatusBadRequest)
-		return
-	}
-
-	err = gh.pollService.ClosePoll(pollID, req.AdminKey)
-	if err != nil {
-		log.Printf("Error closing poll: %v", err)
-		http.Error(w, "Invalid admin key", http.StatusUnauthorized)
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"success": true,
-		"message": "Poll closed",
-	})
+	gh.proxyRequest(w, r, "POST", fmt.Sprintf("%s/polls/%s/close", gh.pollManagerURL, pollID))
 }
 
-// GetVoteStatus обработчик для проверки статуса голоса
+// GetVoteStatus - оставляем в Gateway
 func (gh *GatewayHandler) GetVoteStatus(w http.ResponseWriter, r *http.Request) {
 	pollID := chi.URLParam(r, "pollID")
 	ip := GetClientIP(r)
@@ -201,15 +132,89 @@ func (gh *GatewayHandler) GetVoteStatus(w http.ResponseWriter, r *http.Request) 
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"poll_id":   pollID,
 		"ip":        ip,
-		"has_voted": false, // Будет получаться из Anti-Fraud Service
+		"has_voted": false,
 	})
 }
 
-// Health обработчик для проверки здоровья сервиса
+// Health check
 func (gh *GatewayHandler) Health(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"status":  "ok",
 		"service": "gateway",
 	})
+}
+
+// proxyRequest - общий метод для проксирования запросов
+func (gh *GatewayHandler) proxyRequest(w http.ResponseWriter, r *http.Request, method, url string) {
+	// Читаем тело запроса
+	var body io.Reader
+	if r.Body != nil {
+		bodyBytes, err := io.ReadAll(r.Body)
+		if err != nil {
+			log.Printf("Error reading request body: %v", err)
+			http.Error(w, "Error reading request body", http.StatusInternalServerError)
+			return
+		}
+		body = bytes.NewReader(bodyBytes)
+	}
+
+	// Создаем новый запрос к Poll Manager
+	proxyReq, err := http.NewRequestWithContext(r.Context(), method, url, body)
+	if err != nil {
+		log.Printf("Error creating proxy request: %v", err)
+		http.Error(w, "Error creating proxy request", http.StatusInternalServerError)
+		return
+	}
+
+	// Копируем заголовки
+	for key, values := range r.Header {
+		for _, value := range values {
+			proxyReq.Header.Add(key, value)
+		}
+	}
+
+	// Выполняем запрос через HTTP клиент (может быть моком)
+	resp, err := gh.httpClient.Do(proxyReq)
+	if err != nil {
+		log.Printf("Error proxying request to %s: %v", url, err)
+		http.Error(w, "Service unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	defer resp.Body.Close()
+
+	// Копируем заголовки ответа
+	for key, values := range resp.Header {
+		for _, value := range values {
+			w.Header().Add(key, value)
+		}
+	}
+
+	// Копируем статус и тело ответа
+	w.WriteHeader(resp.StatusCode)
+	io.Copy(w, resp.Body)
+}
+
+// getPollStatus - получает статус опроса из Poll Manager
+func (gh *GatewayHandler) getPollStatus(pollID string) (*models.Poll, error) {
+	resp, err := gh.httpClient.Get(fmt.Sprintf("%s/polls/%s", gh.pollManagerURL, pollID))
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusNotFound {
+		return nil, nil
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("unexpected status code: %d", resp.StatusCode)
+	}
+
+	var poll models.Poll
+	if err := json.NewDecoder(resp.Body).Decode(&poll); err != nil {
+		return nil, err
+	}
+
+	return &poll, nil
 }

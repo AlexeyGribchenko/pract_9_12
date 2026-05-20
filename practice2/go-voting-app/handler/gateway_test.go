@@ -9,18 +9,36 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
-	"voting-app/antifraud"
 	"voting-app/models"
-	"voting-app/service"
 
 	"github.com/go-chi/chi/v5"
 )
 
 func TestGatewayHandler_CreatePoll_Success(t *testing.T) {
-	mockRepo := service.NewMockPollRepository()
-	mockCache := antifraud.NewMockCache()
-	pollService := service.NewPollService(mockRepo, mockCache)
-	handler := NewGatewayHandler(pollService)
+	handler := NewGatewayHandler("http://poll-manager:8002")
+
+	// Мокаем HTTP-клиент
+	mockClient := &MockHTTPClient{
+		DoFunc: func(req *http.Request) (*http.Response, error) {
+			// Проверяем, что запрос правильный
+			if req.Method != "POST" {
+				t.Errorf("expected POST, got %s", req.Method)
+			}
+			if req.URL.String() != "http://poll-manager:8002/polls" {
+				t.Errorf("unexpected URL: %s", req.URL.String())
+			}
+
+			// Возвращаем успешный ответ
+			resp := models.CreatePollResponse{
+				ID:       "test-poll-id",
+				AdminKey: "test-admin-key",
+				Title:    "Best Language",
+			}
+			body, _ := json.Marshal(resp)
+			return mockJSONResponse(http.StatusCreated, string(body)), nil
+		},
+	}
+	handler.SetHTTPClient(mockClient)
 
 	req := models.CreatePollRequest{
 		Title:   "Best Language",
@@ -40,22 +58,23 @@ func TestGatewayHandler_CreatePoll_Success(t *testing.T) {
 	var resp models.CreatePollResponse
 	json.NewDecoder(w.Body).Decode(&resp)
 
-	if resp.ID == "" {
-		t.Error("response should have poll ID")
+	if resp.ID != "test-poll-id" {
+		t.Errorf("expected ID 'test-poll-id', got '%s'", resp.ID)
 	}
-	if resp.AdminKey == "" {
-		t.Error("response should have admin key")
-	}
-	if resp.Title != "Best Language" {
-		t.Errorf("expected title 'Best Language', got '%s'", resp.Title)
+	if resp.AdminKey != "test-admin-key" {
+		t.Errorf("expected admin key 'test-admin-key', got '%s'", resp.AdminKey)
 	}
 }
 
 func TestGatewayHandler_CreatePoll_MissingTitle(t *testing.T) {
-	mockRepo := service.NewMockPollRepository()
-	mockCache := antifraud.NewMockCache()
-	pollService := service.NewPollService(mockRepo, mockCache)
-	handler := NewGatewayHandler(pollService)
+	handler := NewGatewayHandler("http://poll-manager:8002")
+
+	mockClient := &MockHTTPClient{
+		DoFunc: func(req *http.Request) (*http.Response, error) {
+			return mockResponse(http.StatusBadRequest, "title and options required"), nil
+		},
+	}
+	handler.SetHTTPClient(mockClient)
 
 	req := models.CreatePollRequest{
 		Title:   "",
@@ -73,49 +92,15 @@ func TestGatewayHandler_CreatePoll_MissingTitle(t *testing.T) {
 	}
 }
 
-func TestGatewayHandler_CreatePoll_NoOptions(t *testing.T) {
-	mockRepo := service.NewMockPollRepository()
-	mockCache := antifraud.NewMockCache()
-	pollService := service.NewPollService(mockRepo, mockCache)
-	handler := NewGatewayHandler(pollService)
-
-	req := models.CreatePollRequest{
-		Title:   "Test Poll",
-		Options: []string{},
-	}
-
-	body, _ := json.Marshal(req)
-	httpReq := httptest.NewRequest("POST", "/polls", bytes.NewBuffer(body))
-	w := httptest.NewRecorder()
-
-	handler.CreatePoll(w, httpReq)
-
-	if w.Code != http.StatusBadRequest {
-		t.Errorf("expected status 400, got %d", w.Code)
-	}
-}
-
-func TestGatewayHandler_CreatePoll_InvalidJSON(t *testing.T) {
-	mockRepo := service.NewMockPollRepository()
-	mockCache := antifraud.NewMockCache()
-	pollService := service.NewPollService(mockRepo, mockCache)
-	handler := NewGatewayHandler(pollService)
-
-	httpReq := httptest.NewRequest("POST", "/polls", bytes.NewBuffer([]byte("invalid json")))
-	w := httptest.NewRecorder()
-
-	handler.CreatePoll(w, httpReq)
-
-	if w.Code != http.StatusBadRequest {
-		t.Errorf("expected status 400, got %d", w.Code)
-	}
-}
-
 func TestGatewayHandler_GetPoll_NotFound(t *testing.T) {
-	mockRepo := service.NewMockPollRepository()
-	mockCache := antifraud.NewMockCache()
-	pollService := service.NewPollService(mockRepo, mockCache)
-	handler := NewGatewayHandler(pollService)
+	handler := NewGatewayHandler("http://poll-manager:8002")
+
+	mockClient := &MockHTTPClient{
+		DoFunc: func(req *http.Request) (*http.Response, error) {
+			return mockResponse(http.StatusNotFound, "not found"), nil
+		},
+	}
+	handler.SetHTTPClient(mockClient)
 
 	httpReq := requestWithPollID("GET", "/polls/non-existent", nil, "non-existent")
 	w := httptest.NewRecorder()
@@ -128,17 +113,22 @@ func TestGatewayHandler_GetPoll_NotFound(t *testing.T) {
 }
 
 func TestGatewayHandler_GetPoll_Success(t *testing.T) {
-	mockRepo := service.NewMockPollRepository()
-	mockCache := antifraud.NewMockCache()
-	pollService := service.NewPollService(mockRepo, mockCache)
-	handler := NewGatewayHandler(pollService)
+	handler := NewGatewayHandler("http://poll-manager:8002")
 
-	resp, err := pollService.CreatePoll("Handler Poll", []string{"A", "B"})
-	if err != nil {
-		t.Fatalf("unexpected error creating poll: %v", err)
+	mockClient := &MockHTTPClient{
+		DoFunc: func(req *http.Request) (*http.Response, error) {
+			poll := models.Poll{
+				ID:     "test-poll",
+				Title:  "Test Poll",
+				Status: "active",
+			}
+			body, _ := json.Marshal(poll)
+			return mockJSONResponse(http.StatusOK, string(body)), nil
+		},
 	}
+	handler.SetHTTPClient(mockClient)
 
-	httpReq := requestWithPollID("GET", "/polls/test-poll", nil, resp.ID)
+	httpReq := requestWithPollID("GET", "/polls/test-poll", nil, "test-poll")
 	w := httptest.NewRecorder()
 
 	handler.GetPoll(w, httpReq)
@@ -147,61 +137,36 @@ func TestGatewayHandler_GetPoll_Success(t *testing.T) {
 		t.Fatalf("expected status 200, got %d", w.Code)
 	}
 
-	var poll models.PollWithOptions
+	var poll models.Poll
 	if err := json.NewDecoder(w.Body).Decode(&poll); err != nil {
 		t.Fatalf("unexpected decode error: %v", err)
 	}
-	if poll.ID != resp.ID {
-		t.Errorf("expected poll id '%s', got '%s'", resp.ID, poll.ID)
-	}
-	if len(poll.Options) != 2 {
-		t.Errorf("expected 2 options, got %d", len(poll.Options))
-	}
-}
-
-func TestGatewayHandler_GetResults_EmptyPoll(t *testing.T) {
-	mockRepo := service.NewMockPollRepository()
-	mockCache := antifraud.NewMockCache()
-	pollService := service.NewPollService(mockRepo, mockCache)
-
-	// Создаем опрос
-	resp, _ := pollService.CreatePoll("Test Poll", []string{"A", "B", "C"})
-
-	// Получаем результаты
-	results, err := pollService.GetResults(resp.ID)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	if results == nil {
-		t.Error("results should not be nil")
-	}
-
-	// Все опции должны быть в результатах
-	if len(results.Results) != 3 {
-		t.Errorf("expected 3 results, got %d", len(results.Results))
-	}
-
-	// Все счетчики должны быть 0
-	for _, result := range results.Results {
-		if result.Count != 0 {
-			t.Errorf("expected 0 votes initially, got %d", result.Count)
-		}
+	if poll.ID != "test-poll" {
+		t.Errorf("expected poll id 'test-poll', got '%s'", poll.ID)
 	}
 }
 
 func TestGatewayHandler_GetResults_Success(t *testing.T) {
-	mockRepo := service.NewMockPollRepository()
-	mockCache := antifraud.NewMockCache()
-	pollService := service.NewPollService(mockRepo, mockCache)
-	handler := NewGatewayHandler(pollService)
+	handler := NewGatewayHandler("http://poll-manager:8002")
 
-	resp, err := pollService.CreatePoll("Results Poll", []string{"A", "B"})
-	if err != nil {
-		t.Fatalf("unexpected error creating poll: %v", err)
+	mockClient := &MockHTTPClient{
+		DoFunc: func(req *http.Request) (*http.Response, error) {
+			results := models.PollResults{
+				PollID: "test-poll",
+				Title:  "Results Poll",
+				Status: "active",
+				Results: map[string]models.PollOptionCount{
+					"opt-1": {Option: "opt-1", Text: "A", Count: 5},
+					"opt-2": {Option: "opt-2", Text: "B", Count: 3},
+				},
+			}
+			body, _ := json.Marshal(results)
+			return mockJSONResponse(http.StatusOK, string(body)), nil
+		},
 	}
+	handler.SetHTTPClient(mockClient)
 
-	httpReq := requestWithPollID("GET", "/polls/test-poll/results", nil, resp.ID)
+	httpReq := requestWithPollID("GET", "/polls/test-poll/results", nil, "test-poll")
 	w := httptest.NewRecorder()
 
 	handler.GetResults(w, httpReq)
@@ -214,42 +179,33 @@ func TestGatewayHandler_GetResults_Success(t *testing.T) {
 	if err := json.NewDecoder(w.Body).Decode(&results); err != nil {
 		t.Fatalf("unexpected decode error: %v", err)
 	}
-	if results.PollID != resp.ID {
-		t.Errorf("expected poll id '%s', got '%s'", resp.ID, results.PollID)
-	}
-}
-
-func TestGatewayHandler_GetResults_NotFound(t *testing.T) {
-	mockRepo := service.NewMockPollRepository()
-	mockCache := antifraud.NewMockCache()
-	pollService := service.NewPollService(mockRepo, mockCache)
-	handler := NewGatewayHandler(pollService)
-
-	httpReq := requestWithPollID("GET", "/polls/missing/results", nil, "missing")
-	w := httptest.NewRecorder()
-
-	handler.GetResults(w, httpReq)
-
-	if w.Code != http.StatusNotFound {
-		t.Errorf("expected status 404, got %d", w.Code)
+	if results.PollID != "test-poll" {
+		t.Errorf("expected poll id 'test-poll', got '%s'", results.PollID)
 	}
 }
 
 func TestGatewayHandler_Vote_Success(t *testing.T) {
-	mockRepo := service.NewMockPollRepository()
-	mockCache := antifraud.NewMockCache()
-	pollService := service.NewPollService(mockRepo, mockCache)
-	handler := NewGatewayHandler(pollService)
+	handler := NewGatewayHandler("http://poll-manager:8002")
+
+	mockClient := &MockHTTPClient{
+		GetFunc: func(url string) (*http.Response, error) {
+			// Мокаем проверку статуса опроса
+			poll := models.Poll{
+				ID:     "test-poll",
+				Title:  "Vote Poll",
+				Status: "active",
+			}
+			body, _ := json.Marshal(poll)
+			return mockJSONResponse(http.StatusOK, string(body)), nil
+		},
+	}
+	handler.SetHTTPClient(mockClient)
+
 	publisher := &testVotePublisher{}
 	handler.SetVotePublisher(publisher)
 
-	createResp, err := pollService.CreatePoll("Vote Poll", []string{"A", "B"})
-	if err != nil {
-		t.Fatalf("unexpected error creating poll: %v", err)
-	}
-
 	body, _ := json.Marshal(models.VoteRequest{OptionID: "option-1"})
-	httpReq := requestWithPollID("POST", "/polls/test-poll/vote", bytes.NewBuffer(body), createResp.ID)
+	httpReq := requestWithPollID("POST", "/polls/test-poll/vote", bytes.NewBuffer(body), "test-poll")
 	httpReq.RemoteAddr = "192.168.1.50:1234"
 	httpReq.Header.Set("User-Agent", "test-agent")
 	w := httptest.NewRecorder()
@@ -257,7 +213,7 @@ func TestGatewayHandler_Vote_Success(t *testing.T) {
 	handler.Vote(w, httpReq)
 
 	if w.Code != http.StatusOK {
-		t.Fatalf("expected status 200, got %d", w.Code)
+		t.Fatalf("expected status 200, got %d: %s", w.Code, w.Body.String())
 	}
 
 	var voteResp models.VoteResponse
@@ -270,16 +226,15 @@ func TestGatewayHandler_Vote_Success(t *testing.T) {
 	if len(publisher.events) != 1 {
 		t.Fatalf("expected one published event, got %d", len(publisher.events))
 	}
-	if publisher.events[0].PollID != createResp.ID {
-		t.Errorf("expected published poll id '%s', got '%s'", createResp.ID, publisher.events[0].PollID)
+	if publisher.events[0].PollID != "test-poll" {
+		t.Errorf("expected published poll id 'test-poll', got '%s'", publisher.events[0].PollID)
 	}
 }
 
 func TestGatewayHandler_Vote_InvalidJSON(t *testing.T) {
-	mockRepo := service.NewMockPollRepository()
-	mockCache := antifraud.NewMockCache()
-	pollService := service.NewPollService(mockRepo, mockCache)
-	handler := NewGatewayHandler(pollService)
+	handler := NewGatewayHandler("http://poll-manager:8002")
+
+	// Не настраиваем HTTP-клиент, так как до него не должно дойти
 
 	httpReq := requestWithPollID("POST", "/polls/poll-1/vote", bytes.NewBufferString("{"), "poll-1")
 	w := httptest.NewRecorder()
@@ -292,10 +247,7 @@ func TestGatewayHandler_Vote_InvalidJSON(t *testing.T) {
 }
 
 func TestGatewayHandler_Vote_MissingOptionID(t *testing.T) {
-	mockRepo := service.NewMockPollRepository()
-	mockCache := antifraud.NewMockCache()
-	pollService := service.NewPollService(mockRepo, mockCache)
-	handler := NewGatewayHandler(pollService)
+	handler := NewGatewayHandler("http://poll-manager:8002")
 
 	body, _ := json.Marshal(models.VoteRequest{})
 	httpReq := requestWithPollID("POST", "/polls/poll-1/vote", bytes.NewBuffer(body), "poll-1")
@@ -309,10 +261,15 @@ func TestGatewayHandler_Vote_MissingOptionID(t *testing.T) {
 }
 
 func TestGatewayHandler_Vote_PollNotFound(t *testing.T) {
-	mockRepo := service.NewMockPollRepository()
-	mockCache := antifraud.NewMockCache()
-	pollService := service.NewPollService(mockRepo, mockCache)
-	handler := NewGatewayHandler(pollService)
+	handler := NewGatewayHandler("http://poll-manager:8002")
+
+	mockClient := &MockHTTPClient{
+		GetFunc: func(url string) (*http.Response, error) {
+			// Возвращаем 404 - опрос не найден
+			return mockResponse(http.StatusNotFound, "not found"), nil
+		},
+	}
+	handler.SetHTTPClient(mockClient)
 
 	body, _ := json.Marshal(models.VoteRequest{OptionID: "option-1"})
 	httpReq := requestWithPollID("POST", "/polls/missing/vote", bytes.NewBuffer(body), "missing")
@@ -321,71 +278,106 @@ func TestGatewayHandler_Vote_PollNotFound(t *testing.T) {
 	handler.Vote(w, httpReq)
 
 	if w.Code != http.StatusNotFound {
-		t.Errorf("expected status 404, got %d", w.Code)
+		t.Errorf("expected status 404, got %d: %s", w.Code, w.Body.String())
 	}
 }
 
 func TestGatewayHandler_Vote_InactivePoll(t *testing.T) {
-	mockRepo := service.NewMockPollRepository()
-	mockCache := antifraud.NewMockCache()
-	pollService := service.NewPollService(mockRepo, mockCache)
-	handler := NewGatewayHandler(pollService)
+	handler := NewGatewayHandler("http://poll-manager:8002")
 
-	resp, err := pollService.CreatePoll("Inactive Poll", []string{"A", "B"})
-	if err != nil {
-		t.Fatalf("unexpected error creating poll: %v", err)
+	mockClient := &MockHTTPClient{
+		GetFunc: func(url string) (*http.Response, error) {
+			poll := models.Poll{
+				ID:     "test-poll",
+				Title:  "Inactive Poll",
+				Status: "closed",
+			}
+			body, _ := json.Marshal(poll)
+			return mockJSONResponse(http.StatusOK, string(body)), nil
+		},
 	}
-	if err := pollService.ClosePoll(resp.ID, resp.AdminKey); err != nil {
-		t.Fatalf("unexpected error closing poll: %v", err)
-	}
+	handler.SetHTTPClient(mockClient)
 
 	body, _ := json.Marshal(models.VoteRequest{OptionID: "option-1"})
-	httpReq := requestWithPollID("POST", "/polls/test-poll/vote", bytes.NewBuffer(body), resp.ID)
+	httpReq := requestWithPollID("POST", "/polls/test-poll/vote", bytes.NewBuffer(body), "test-poll")
 	w := httptest.NewRecorder()
 
 	handler.Vote(w, httpReq)
 
 	if w.Code != http.StatusBadRequest {
-		t.Errorf("expected status 400, got %d", w.Code)
+		t.Errorf("expected status 400, got %d: %s", w.Code, w.Body.String())
 	}
 }
 
 func TestGatewayHandler_Vote_PublishError(t *testing.T) {
-	mockRepo := service.NewMockPollRepository()
-	mockCache := antifraud.NewMockCache()
-	pollService := service.NewPollService(mockRepo, mockCache)
-	handler := NewGatewayHandler(pollService)
-	handler.SetVotePublisher(&testVotePublisher{err: errors.New("publish failed")})
+	handler := NewGatewayHandler("http://poll-manager:8002")
 
-	resp, err := pollService.CreatePoll("Publish Error Poll", []string{"A", "B"})
-	if err != nil {
-		t.Fatalf("unexpected error creating poll: %v", err)
+	mockClient := &MockHTTPClient{
+		GetFunc: func(url string) (*http.Response, error) {
+			poll := models.Poll{
+				ID:     "test-poll",
+				Title:  "Publish Error Poll",
+				Status: "active",
+			}
+			body, _ := json.Marshal(poll)
+			return mockJSONResponse(http.StatusOK, string(body)), nil
+		},
 	}
+	handler.SetHTTPClient(mockClient)
+
+	publisher := &testVotePublisher{err: errors.New("publish failed")}
+	handler.SetVotePublisher(publisher)
 
 	body, _ := json.Marshal(models.VoteRequest{OptionID: "option-1"})
-	httpReq := requestWithPollID("POST", "/polls/test-poll/vote", bytes.NewBuffer(body), resp.ID)
+	httpReq := requestWithPollID("POST", "/polls/test-poll/vote", bytes.NewBuffer(body), "test-poll")
 	w := httptest.NewRecorder()
 
 	handler.Vote(w, httpReq)
 
 	if w.Code != http.StatusInternalServerError {
-		t.Errorf("expected status 500, got %d", w.Code)
+		t.Errorf("expected status 500, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestGatewayHandler_Vote_PollManagerError(t *testing.T) {
+	handler := NewGatewayHandler("http://poll-manager:8002")
+
+	mockClient := &MockHTTPClient{
+		GetFunc: func(url string) (*http.Response, error) {
+			// Симулируем ошибку соединения
+			return nil, errors.New("connection refused")
+		},
+	}
+	handler.SetHTTPClient(mockClient)
+
+	body, _ := json.Marshal(models.VoteRequest{OptionID: "option-1"})
+	httpReq := requestWithPollID("POST", "/polls/test-poll/vote", bytes.NewBuffer(body), "test-poll")
+	w := httptest.NewRecorder()
+
+	handler.Vote(w, httpReq)
+
+	if w.Code != http.StatusInternalServerError {
+		t.Errorf("expected status 500, got %d: %s", w.Code, w.Body.String())
 	}
 }
 
 func TestGatewayHandler_ClosePoll_Success(t *testing.T) {
-	mockRepo := service.NewMockPollRepository()
-	mockCache := antifraud.NewMockCache()
-	pollService := service.NewPollService(mockRepo, mockCache)
-	handler := NewGatewayHandler(pollService)
+	handler := NewGatewayHandler("http://poll-manager:8002")
 
-	resp, err := pollService.CreatePoll("Close Poll", []string{"A", "B"})
-	if err != nil {
-		t.Fatalf("unexpected error creating poll: %v", err)
+	mockClient := &MockHTTPClient{
+		DoFunc: func(req *http.Request) (*http.Response, error) {
+			resp := map[string]interface{}{
+				"success": true,
+				"message": "Poll closed",
+			}
+			body, _ := json.Marshal(resp)
+			return mockJSONResponse(http.StatusOK, string(body)), nil
+		},
 	}
+	handler.SetHTTPClient(mockClient)
 
-	body, _ := json.Marshal(models.ClosePollRequest{AdminKey: resp.AdminKey})
-	httpReq := requestWithPollID("POST", "/polls/test-poll/close", bytes.NewBuffer(body), resp.ID)
+	body, _ := json.Marshal(models.ClosePollRequest{AdminKey: "valid-key"})
+	httpReq := requestWithPollID("POST", "/polls/test-poll/close", bytes.NewBuffer(body), "test-poll")
 	w := httptest.NewRecorder()
 
 	handler.ClosePoll(w, httpReq)
@@ -403,52 +395,18 @@ func TestGatewayHandler_ClosePoll_Success(t *testing.T) {
 	}
 }
 
-func TestGatewayHandler_ClosePoll_InvalidJSON(t *testing.T) {
-	mockRepo := service.NewMockPollRepository()
-	mockCache := antifraud.NewMockCache()
-	pollService := service.NewPollService(mockRepo, mockCache)
-	handler := NewGatewayHandler(pollService)
-
-	httpReq := requestWithPollID("POST", "/polls/poll-1/close", bytes.NewBufferString("{"), "poll-1")
-	w := httptest.NewRecorder()
-
-	handler.ClosePoll(w, httpReq)
-
-	if w.Code != http.StatusBadRequest {
-		t.Errorf("expected status 400, got %d", w.Code)
-	}
-}
-
-func TestGatewayHandler_ClosePoll_MissingAdminKey(t *testing.T) {
-	mockRepo := service.NewMockPollRepository()
-	mockCache := antifraud.NewMockCache()
-	pollService := service.NewPollService(mockRepo, mockCache)
-	handler := NewGatewayHandler(pollService)
-
-	body, _ := json.Marshal(models.ClosePollRequest{})
-	httpReq := requestWithPollID("POST", "/polls/poll-1/close", bytes.NewBuffer(body), "poll-1")
-	w := httptest.NewRecorder()
-
-	handler.ClosePoll(w, httpReq)
-
-	if w.Code != http.StatusBadRequest {
-		t.Errorf("expected status 400, got %d", w.Code)
-	}
-}
-
 func TestGatewayHandler_ClosePoll_InvalidAdminKey(t *testing.T) {
-	mockRepo := service.NewMockPollRepository()
-	mockCache := antifraud.NewMockCache()
-	pollService := service.NewPollService(mockRepo, mockCache)
-	handler := NewGatewayHandler(pollService)
+	handler := NewGatewayHandler("http://poll-manager:8002")
 
-	resp, err := pollService.CreatePoll("Close Poll", []string{"A", "B"})
-	if err != nil {
-		t.Fatalf("unexpected error creating poll: %v", err)
+	mockClient := &MockHTTPClient{
+		DoFunc: func(req *http.Request) (*http.Response, error) {
+			return mockResponse(http.StatusUnauthorized, "invalid admin key"), nil
+		},
 	}
+	handler.SetHTTPClient(mockClient)
 
 	body, _ := json.Marshal(models.ClosePollRequest{AdminKey: "wrong-key"})
-	httpReq := requestWithPollID("POST", "/polls/test-poll/close", bytes.NewBuffer(body), resp.ID)
+	httpReq := requestWithPollID("POST", "/polls/test-poll/close", bytes.NewBuffer(body), "test-poll")
 	w := httptest.NewRecorder()
 
 	handler.ClosePoll(w, httpReq)
@@ -459,10 +417,7 @@ func TestGatewayHandler_ClosePoll_InvalidAdminKey(t *testing.T) {
 }
 
 func TestGatewayHandler_GetVoteStatus(t *testing.T) {
-	mockRepo := service.NewMockPollRepository()
-	mockCache := antifraud.NewMockCache()
-	pollService := service.NewPollService(mockRepo, mockCache)
-	handler := NewGatewayHandler(pollService)
+	handler := NewGatewayHandler("http://poll-manager:8002")
 
 	httpReq := requestWithPollID("GET", "/polls/poll-1/vote-status", nil, "poll-1")
 	httpReq.Header.Set("X-Real-IP", "10.0.0.10")
@@ -484,44 +439,10 @@ func TestGatewayHandler_GetVoteStatus(t *testing.T) {
 	if status["ip"] != "10.0.0.10" {
 		t.Errorf("unexpected ip: %v", status["ip"])
 	}
-	if status["has_voted"] != false {
-		t.Errorf("expected has_voted false, got %v", status["has_voted"])
-	}
-}
-
-func TestGatewayHandler_VoteRequest_Validation(t *testing.T) {
-	tests := []struct {
-		name  string
-		req   models.VoteRequest
-		valid bool
-	}{
-		{
-			name:  "valid vote request",
-			req:   models.VoteRequest{OptionID: "opt-1"},
-			valid: true,
-		},
-		{
-			name:  "invalid - empty option_id",
-			req:   models.VoteRequest{OptionID: ""},
-			valid: false,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			isValid := tt.req.OptionID != ""
-			if isValid != tt.valid {
-				t.Errorf("expected validation %v, got %v", tt.valid, isValid)
-			}
-		})
-	}
 }
 
 func TestGatewayHandler_Health(t *testing.T) {
-	mockRepo := service.NewMockPollRepository()
-	mockCache := antifraud.NewMockCache()
-	pollService := service.NewPollService(mockRepo, mockCache)
-	handler := NewGatewayHandler(pollService)
+	handler := NewGatewayHandler("http://poll-manager:8002")
 
 	httpReq := httptest.NewRequest("GET", "/health", nil)
 	w := httptest.NewRecorder()
@@ -547,6 +468,7 @@ func TestGatewayHandler_GetClientIP(t *testing.T) {
 	tests := []struct {
 		name          string
 		xForwardedFor string
+		xRealIP       string
 		remoteAddr    string
 		expectedIP    string
 	}{
@@ -557,28 +479,15 @@ func TestGatewayHandler_GetClientIP(t *testing.T) {
 			expectedIP:    "192.168.1.100",
 		},
 		{
-			name:          "Remote address",
-			xForwardedFor: "",
-			remoteAddr:    "192.168.1.50:5000",
-			expectedIP:    "192.168.1.50",
+			name:       "X-Real-IP header",
+			xRealIP:    "10.0.0.20",
+			remoteAddr: "127.0.0.1:8080",
+			expectedIP: "10.0.0.20",
 		},
 		{
-			name:          "Multiple IPs in X-Forwarded-For",
-			xForwardedFor: "192.168.1.100, 10.0.0.1",
-			remoteAddr:    "127.0.0.1:8080",
-			expectedIP:    "192.168.1.100, 10.0.0.1",
-		},
-		{
-			name:          "X-Real-IP header",
-			xForwardedFor: "",
-			remoteAddr:    "127.0.0.1:8080",
-			expectedIP:    "10.0.0.20",
-		},
-		{
-			name:          "Remote address without port",
-			xForwardedFor: "",
-			remoteAddr:    "192.168.1.60",
-			expectedIP:    "192.168.1.60",
+			name:       "Remote address",
+			remoteAddr: "192.168.1.50:5000",
+			expectedIP: "192.168.1.50",
 		},
 	}
 
@@ -588,8 +497,8 @@ func TestGatewayHandler_GetClientIP(t *testing.T) {
 			if tt.xForwardedFor != "" {
 				httpReq.Header.Set("X-Forwarded-For", tt.xForwardedFor)
 			}
-			if tt.name == "X-Real-IP header" {
-				httpReq.Header.Set("X-Real-IP", tt.expectedIP)
+			if tt.xRealIP != "" {
+				httpReq.Header.Set("X-Real-IP", tt.xRealIP)
 			}
 			httpReq.RemoteAddr = tt.remoteAddr
 
@@ -601,6 +510,27 @@ func TestGatewayHandler_GetClientIP(t *testing.T) {
 	}
 }
 
+func TestGatewayHandler_ProxyRequest_ServiceUnavailable(t *testing.T) {
+	handler := NewGatewayHandler("http://poll-manager:8002")
+
+	mockClient := &MockHTTPClient{
+		DoFunc: func(req *http.Request) (*http.Response, error) {
+			return nil, errors.New("connection refused")
+		},
+	}
+	handler.SetHTTPClient(mockClient)
+
+	httpReq := requestWithPollID("GET", "/polls/test", nil, "test")
+	w := httptest.NewRecorder()
+
+	handler.GetPoll(w, httpReq)
+
+	if w.Code != http.StatusServiceUnavailable {
+		t.Errorf("expected status 503, got %d", w.Code)
+	}
+}
+
+// Вспомогательные функции
 func requestWithPollID(method string, target string, body io.Reader, pollID string) *http.Request {
 	req := httptest.NewRequest(method, target, body)
 	routeContext := chi.NewRouteContext()
@@ -608,6 +538,7 @@ func requestWithPollID(method string, target string, body io.Reader, pollID stri
 	return req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, routeContext))
 }
 
+// Mock publisher для тестов
 type testVotePublisher struct {
 	events []models.VoteEventMessage
 	err    error

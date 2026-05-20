@@ -390,7 +390,7 @@ func TestVoteProcessor_LogVoteEvent(t *testing.T) {
 		OptionID: "option-1",
 		IP:       "192.168.1.10",
 	}
-	
+
 	// LogVoteEvent just logs, doesn't return anything, so we just verify it doesn't panic
 	processor.LogVoteEvent(vote)
 }

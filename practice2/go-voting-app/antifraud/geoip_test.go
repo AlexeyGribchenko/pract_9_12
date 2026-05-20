@@ -65,9 +65,9 @@ func TestGeoIPChecker_ClassifyIP_DatacenterRanges(t *testing.T) {
 	// Тестируем классификацию IP напрямую через private method тестом
 	// Используем структуру checker для доступа к classifyIP
 	tests := []struct {
-		name           string
-		ip             string
-		expectedType   string
+		name         string
+		ip           string
+		expectedType string
 	}{
 		{"Google DNS", "8.8.8.8", "datacenter"},
 		{"Cloudflare DNS", "1.1.1.1", "datacenter"},
@@ -122,7 +122,7 @@ func TestGeoIPChecker_DifferentIPs_IndependentClassification(t *testing.T) {
 	checker := NewGeoIPChecker(mockCache, "http://localhost:8080", "test-key")
 
 	ip1 := "8.8.8.8"       // datacenter
-	ip2 := "192.168.1.100"  // private/local
+	ip2 := "192.168.1.100" // private/local
 
 	// Тестируем классификацию напрямую
 	type1 := checker.classifyIP(ip1)

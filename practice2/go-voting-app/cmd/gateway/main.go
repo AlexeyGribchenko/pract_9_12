@@ -9,13 +9,9 @@ import (
 	"os/signal"
 	"syscall"
 	"time"
-	"voting-app/cache"
 	"voting-app/config"
-	"voting-app/db"
 	"voting-app/handler"
 	"voting-app/models"
-	"voting-app/repository"
-	"voting-app/service"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/nats-io/nats.go"
@@ -26,27 +22,7 @@ func main() {
 
 	cfg := config.Load()
 
-	// Подключаемся к БД
-	database, err := db.Connect(cfg.DBHost, cfg.DBPort, cfg.DBUser, cfg.DBPassword, cfg.DBName)
-	if err != nil {
-		log.Fatalf("Failed to connect to database: %v", err)
-	}
-	defer database.Close()
-
-	// Инициализируем схему БД
-	err = db.InitSchema(database)
-	if err != nil {
-		log.Fatalf("Failed to init schema: %v", err)
-	}
-
-	// Подключаемся к Redis
-	redisCache, err := cache.NewRedisCache(cfg.RedisHost, cfg.RedisPort)
-	if err != nil {
-		log.Fatalf("Failed to connect to Redis: %v", err)
-	}
-	defer redisCache.Close()
-
-	// Подключаемся к NATS
+	// Подключаемся к NATS (только для публикации голосов)
 	nc, err := nats.Connect(cfg.NatsURL)
 	if err != nil {
 		log.Fatalf("Failed to connect to NATS: %v", err)
@@ -55,12 +31,9 @@ func main() {
 
 	log.Println("✓ Connected to NATS")
 
-	// Инициализируем репозиторий и сервис
-	pollRepo := repository.NewPollRepository(database)
-	pollService := service.NewPollService(pollRepo, redisCache)
-
-	// Инициализируем обработчик
-	gatewayHandler := handler.NewGatewayHandler(pollService)
+	// Инициализируем обработчик с URL Poll Manager
+	pollManagerURL := "http://poll-manager:" + cfg.PollManagerPort
+	gatewayHandler := handler.NewGatewayHandler(pollManagerURL)
 	gatewayHandler.SetVotePublisher(natsVotePublisher{conn: nc})
 
 	// Создаем маршруты
@@ -75,8 +48,8 @@ func main() {
 	r.Get("/polls/{pollID}/results", gatewayHandler.GetResults)
 	r.Post("/polls/{pollID}/close", gatewayHandler.ClosePoll)
 
+	// Голосование (особая логика)
 	r.Post("/polls/{pollID}/vote", gatewayHandler.Vote)
-
 	r.Get("/polls/{pollID}/vote-status", gatewayHandler.GetVoteStatus)
 
 	// Создаем HTTP сервер
@@ -85,7 +58,7 @@ func main() {
 		Handler: r,
 	}
 
-	// Запускаем сервер в отдельной горутине
+	// Запускаем сервер
 	log.Printf("Gateway Service listening on port %s", cfg.GatewayPort)
 	go func() {
 		err := server.ListenAndServe()
@@ -94,7 +67,7 @@ func main() {
 		}
 	}()
 
-	// Настраиваем graceful shutdown
+	// Graceful shutdown
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 
@@ -102,12 +75,10 @@ func main() {
 	log.Printf("Received signal: %v", sig)
 	log.Println("Shutting down Gateway Service...")
 
-	// Даем серверу 10 секунд на graceful shutdown
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	err = server.Shutdown(ctx)
-	if err != nil {
+	if err := server.Shutdown(ctx); err != nil {
 		log.Printf("Error during server shutdown: %v", err)
 	}
 

@@ -63,7 +63,7 @@ func main() {
 	r.Get("/polls/{pollID}", func(w http.ResponseWriter, r *http.Request) {
 		pollID := chi.URLParam(r, "pollID")
 
-		poll, err := pollService.GetPoll(pollID)
+		poll, options, err := pollService.GetPollWithOptions(pollID)
 		if err != nil {
 			log.Printf("Error getting poll: %v", err)
 			http.Error(w, "Error getting poll", http.StatusInternalServerError)
@@ -75,8 +75,18 @@ func main() {
 			return
 		}
 
+		// Возвращаем опрос с вариантами ответов
+		pollWithOptions := models.PollWithOptions{
+			ID:        poll.ID,
+			Title:     poll.Title,
+			Status:    poll.Status,
+			CreatedAt: poll.CreatedAt,
+			ClosedAt:  poll.ClosedAt,
+			Options:   options,
+		}
+
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(poll)
+		json.NewEncoder(w).Encode(pollWithOptions)
 	})
 
 	// Получить конфигурацию опроса

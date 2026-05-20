@@ -68,6 +68,7 @@ services:
       ANTI_FRAUD_PORT: "8003"
       GEOIP_API_URL: https://api.ipapi.is
       GEOIP_API_KEY: d59a6d66c3673ba3b079
+      POLL_MANAGER_URL: "http://poll-manager:8002"  # URL Poll Manager
     ports:
       - "8001:8001"
     depends_on:
