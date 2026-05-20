@@ -301,3 +301,149 @@ func (r *processorTestRepo) RecordVote(pollID string, optionID string, ip string
 func (r *processorTestRepo) GetVote(pollID string, ip string) (*models.Vote, error) {
 	return nil, nil
 }
+
+// Tests for MockCache methods
+func TestMockCache_Del(t *testing.T) {
+	ctx := context.Background()
+	cache := NewMockCache()
+
+	if err := cache.Set(ctx, "key1", "value1", 0); err != nil {
+		t.Fatalf("Set failed: %v", err)
+	}
+	if err := cache.Set(ctx, "key2", "value2", 0); err != nil {
+		t.Fatalf("Set failed: %v", err)
+	}
+
+	if err := cache.Del(ctx, "key1", "key2"); err != nil {
+		t.Fatalf("Del failed: %v", err)
+	}
+
+	_, err := cache.Get(ctx, "key1")
+	if err == nil {
+		t.Fatal("expected error after deleting key1")
+	}
+
+	_, err = cache.Get(ctx, "key2")
+	if err == nil {
+		t.Fatal("expected error after deleting key2")
+	}
+}
+
+func TestMockCache_IncrBy(t *testing.T) {
+	ctx := context.Background()
+	cache := NewMockCache()
+
+	val, err := cache.IncrBy(ctx, "counter", 5)
+	if err != nil {
+		t.Fatalf("IncrBy failed: %v", err)
+	}
+	if val != 5 {
+		t.Errorf("expected 5, got %d", val)
+	}
+
+	val, err = cache.IncrBy(ctx, "counter", 3)
+	if err != nil {
+		t.Fatalf("IncrBy failed: %v", err)
+	}
+	if val != 8 {
+		t.Errorf("expected 8, got %d", val)
+	}
+}
+
+func TestMockCache_Close(t *testing.T) {
+	cache := NewMockCache()
+	err := cache.Close()
+	if err != nil {
+		t.Errorf("Close failed: %v", err)
+	}
+}
+
+func TestMockCache_Expire(t *testing.T) {
+	ctx := context.Background()
+	cache := NewMockCache()
+
+	if err := cache.Set(ctx, "key", "value", 0); err != nil {
+		t.Fatalf("Set failed: %v", err)
+	}
+
+	err := cache.Expire(ctx, "key", 1*time.Second)
+	if err != nil {
+		t.Errorf("Expire failed: %v", err)
+	}
+
+	val, err := cache.Get(ctx, "key")
+	if err != nil {
+		t.Errorf("Get failed: %v", err)
+	}
+	if val != "value" {
+		t.Errorf("expected 'value', got %s", val)
+	}
+}
+
+func TestVoteProcessor_LogVoteEvent(t *testing.T) {
+	repo := newProcessorTestRepo("active")
+	cache := NewMockCache()
+	processor := newTestVoteProcessor(repo, cache)
+
+	vote := &models.VoteEventMessage{
+		PollID:   "poll-1",
+		OptionID: "option-1",
+		IP:       "192.168.1.10",
+	}
+	
+	// LogVoteEvent just logs, doesn't return anything, so we just verify it doesn't panic
+	processor.LogVoteEvent(vote)
+}
+
+// Test recordVoteInCache
+func TestVoteProcessor_RecordVoteInCache(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	repo := newProcessorTestRepo("active")
+	cache := NewMockCache()
+	processor := newTestVoteProcessor(repo, cache)
+
+	// Запись голоса
+	err := processor.recordVoteInCache(ctx, "poll-1", "option-1", "192.168.1.10")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Проверяем что голос записан в кэш
+	count, err := cache.GetInt(ctx, "vote:count:option-1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if count != 1 {
+		t.Errorf("expected cached count 1, got %d", count)
+	}
+}
+
+// Test checkPollStatus
+func TestVoteProcessor_CheckPollStatus(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	repo := newProcessorTestRepo("active")
+	cache := NewMockCache()
+	processor := newTestVoteProcessor(repo, cache)
+
+	status, err := processor.checkPollStatus(ctx, "poll-1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if status != "active" {
+		t.Errorf("expected status 'active', got '%s'", status)
+	}
+
+	// Проверяем что статус кэшируется
+	cached, err := cache.Get(ctx, "poll:status:poll-1")
+	if err != nil {
+		t.Fatalf("status should be cached: %v", err)
+	}
+	if cached != "active" {
+		t.Errorf("expected cached status 'active', got '%s'", cached)
+	}
+}

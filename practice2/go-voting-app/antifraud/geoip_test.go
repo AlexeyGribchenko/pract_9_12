@@ -138,3 +138,30 @@ func TestGeoIPChecker_DifferentIPs_IndependentClassification(t *testing.T) {
 		t.Errorf("Google DNS should be datacenter, got %s", type1)
 	}
 }
+
+// Additional tests for better coverage
+func TestGeoIPChecker_ErrorHandling(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	mockCache := NewMockCache()
+	checker := NewGeoIPChecker(mockCache, "http://localhost:8080", "test-key")
+
+	// Test with empty IP
+	ipType, _ := checker.CheckIP(ctx, "")
+	if ipType == "" {
+		t.Error("empty IP should still return classification")
+	}
+
+	// Local/private IPs should always return residential
+	localIPs := []string{"127.0.0.1", "::1", "10.0.0.1", "172.16.0.1"}
+	for _, ip := range localIPs {
+		ipType, err := checker.CheckIP(ctx, ip)
+		if err != nil {
+			t.Errorf("unexpected error for %s: %v", ip, err)
+		}
+		if ipType != "residential" {
+			t.Errorf("local IP %s should be residential, got %s", ip, ipType)
+		}
+	}
+}

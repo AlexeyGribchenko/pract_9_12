@@ -2,6 +2,7 @@ package antifraud
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 )
@@ -278,5 +279,149 @@ func TestDeduplicator_DifferentIPs_IndependentTracking(t *testing.T) {
 	hasVoted2, _ := dedup.HasVoted(ctx, pollID, ip2)
 	if hasVoted2 {
 		t.Error("second IP should not be marked as voted")
+	}
+}
+
+// Additional tests for better coverage
+
+func TestRateLimiter_CheckLimit_ThirdVote(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	mockCache := NewMockCache()
+	limiter := NewRateLimiter(mockCache)
+
+	ip := "192.168.1.100"
+	pollID := "poll-1"
+
+	// Проверяем третий голос
+	limiter.CheckLimit(ctx, ip, pollID)
+	limiter.RecordVote(ctx, ip, pollID)
+
+	limiter.CheckLimit(ctx, ip, pollID)
+	limiter.RecordVote(ctx, ip, pollID)
+
+	allowed, err := limiter.CheckLimit(ctx, ip, pollID)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !allowed {
+		t.Errorf("third vote should be allowed")
+	}
+}
+
+func TestRateLimiter_RecordVote_CacheIncrement(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	mockCache := NewMockCache()
+	limiter := NewRateLimiter(mockCache)
+
+	ip := "192.168.1.100"
+	pollID := "poll-1"
+
+	// Запись нескольких голосов
+	for i := 0; i < 3; i++ {
+		err := limiter.RecordVote(ctx, ip, pollID)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	}
+
+	// Проверяем итоговое значение
+	count, _ := mockCache.GetInt(ctx, "ratelimit:minute:"+ip+":"+pollID)
+	if count != 3 {
+		t.Errorf("expected count 3, got %d", count)
+	}
+}
+
+// Hour limit tests
+func TestRateLimiter_CheckLimit_HourLimit(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	mockCache := NewMockCache()
+	limiter := NewRateLimiter(mockCache)
+
+	ip := "192.168.1.100"
+	pollID := "poll-1"
+
+	// Set hour limit to max
+	hourKey := fmt.Sprintf("ratelimit:hour:%s:%s", ip, pollID)
+	mockCache.IncrBy(ctx, hourKey, 60) // Max per hour
+
+	allowed, err := limiter.CheckLimit(ctx, ip, pollID)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if allowed {
+		t.Error("should deny vote when hour limit reached")
+	}
+}
+
+// Day limit tests
+func TestRateLimiter_CheckLimit_DayLimit(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	mockCache := NewMockCache()
+	limiter := NewRateLimiter(mockCache)
+
+	ip := "192.168.1.100"
+	pollID := "poll-1"
+
+	// Set day limit to max
+	dayKey := fmt.Sprintf("ratelimit:day:%s:%s", ip, pollID)
+	mockCache.IncrBy(ctx, dayKey, 300) // Max per day
+
+	allowed, err := limiter.CheckLimit(ctx, ip, pollID)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if allowed {
+		t.Error("should deny vote when day limit reached")
+	}
+}
+
+func contains(s, substr string) bool {
+	for i := 0; i <= len(s)-len(substr); i++ {
+		if s[i:i+len(substr)] == substr {
+			return true
+		}
+	}
+	return false
+}
+
+// Deduplicator edge case tests
+func TestDeduplicator_SAdd_And_SIsMember(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	mockCache := NewMockCache()
+
+	setKey := "test:set"
+	members := []interface{}{"member1", "member2", "member3"}
+
+	err := mockCache.SAdd(ctx, setKey, members...)
+	if err != nil {
+		t.Fatalf("SAdd failed: %v", err)
+	}
+
+	for _, member := range members {
+		isMember, err := mockCache.SIsMember(ctx, setKey, member)
+		if err != nil {
+			t.Fatalf("SIsMember failed: %v", err)
+		}
+		if !isMember {
+			t.Errorf("member %v should be in set", member)
+		}
+	}
+
+	notMember, err := mockCache.SIsMember(ctx, setKey, "nonexistent")
+	if err != nil {
+		t.Fatalf("SIsMember failed: %v", err)
+	}
+	if notMember {
+		t.Error("nonexistent member should not be in set")
 	}
 }

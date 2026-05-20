@@ -1,0 +1,2398 @@
+
+<!DOCTYPE html>
+<html>
+	<head>
+		<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+		<title>antifraud: Go Coverage Report</title>
+		<style>
+			body {
+				background: black;
+				color: rgb(80, 80, 80);
+			}
+			body, pre, #legend span {
+				font-family: Menlo, monospace;
+				font-weight: bold;
+			}
+			#topbar {
+				background: black;
+				position: fixed;
+				top: 0; left: 0; right: 0;
+				height: 42px;
+				border-bottom: 1px solid rgb(80, 80, 80);
+			}
+			#content {
+				margin-top: 50px;
+			}
+			#nav, #legend {
+				float: left;
+				margin-left: 10px;
+			}
+			#legend {
+				margin-top: 12px;
+			}
+			#nav {
+				margin-top: 10px;
+			}
+			#legend span {
+				margin: 0 5px;
+			}
+			.cov0 { color: rgb(192, 0, 0) }
+.cov1 { color: rgb(128, 128, 128) }
+.cov2 { color: rgb(116, 140, 131) }
+.cov3 { color: rgb(104, 152, 134) }
+.cov4 { color: rgb(92, 164, 137) }
+.cov5 { color: rgb(80, 176, 140) }
+.cov6 { color: rgb(68, 188, 143) }
+.cov7 { color: rgb(56, 200, 146) }
+.cov8 { color: rgb(44, 212, 149) }
+.cov9 { color: rgb(32, 224, 152) }
+.cov10 { color: rgb(20, 236, 155) }
+
+		</style>
+	</head>
+	<body>
+		<div id="topbar">
+			<div id="nav">
+				<select id="files">
+				
+				<option value="file0">voting-app/antifraud/geoip.go (58.9%)</option>
+				
+				<option value="file1">voting-app/antifraud/limiter.go (70.2%)</option>
+				
+				<option value="file2">voting-app/antifraud/mock_cache.go (100.0%)</option>
+				
+				<option value="file3">voting-app/antifraud/processor.go (79.1%)</option>
+				
+				<option value="file4">voting-app/cache/redis.go (0.0%)</option>
+				
+				<option value="file5">voting-app/cmd/anti-fraud/main.go (0.0%)</option>
+				
+				<option value="file6">voting-app/cmd/gateway/main.go (0.0%)</option>
+				
+				<option value="file7">voting-app/cmd/poll-manager/main.go (0.0%)</option>
+				
+				<option value="file8">voting-app/config/config.go (100.0%)</option>
+				
+				<option value="file9">voting-app/db/db.go (25.0%)</option>
+				
+				<option value="file10">voting-app/handler/gateway.go (87.1%)</option>
+				
+				<option value="file11">voting-app/handler/utils.go (100.0%)</option>
+				
+				<option value="file12">voting-app/repository/poll_repository.go (81.5%)</option>
+				
+				<option value="file13">voting-app/service/mock_repository.go (58.3%)</option>
+				
+				<option value="file14">voting-app/service/poll_service.go (89.6%)</option>
+				
+				</select>
+			</div>
+			<div id="legend">
+				<span>not tracked</span>
+			
+				<span class="cov0">not covered</span>
+				<span class="cov8">covered</span>
+			
+			</div>
+		</div>
+		<div id="content">
+		
+		<pre class="file" id="file0" style="display: none">package antifraud
+
+import (
+        "context"
+        "encoding/json"
+        "fmt"
+        "io"
+        "log"
+        "net/http"
+        "time"
+)
+
+// GeoIPChecker проверяет тип IP-адреса
+type GeoIPChecker struct {
+        cache  CacheInterface
+        apiURL string
+        apiKey string
+        client *http.Client
+}
+
+func NewGeoIPChecker(cache CacheInterface, apiURL string, apiKey string) *GeoIPChecker <span class="cov8" title="1">{
+        return &amp;GeoIPChecker{
+                cache:  cache,
+                apiURL: apiURL,
+                apiKey: apiKey,
+                client: &amp;http.Client{Timeout: 10 * time.Second},
+        }
+}</span>
+
+// CheckIP проверяет IP-адрес (residential/datacenter/vpn)
+func (gc *GeoIPChecker) CheckIP(ctx context.Context, ip string) (string, error) <span class="cov8" title="1">{
+        // Проверяем локальные IP
+        if isLocalIP(ip) </span><span class="cov8" title="1">{
+                return "residential", nil
+        }</span>
+
+        // Пытаемся получить из кэша
+        <span class="cov8" title="1">cacheKey := "geoip:check:" + ip
+        cachedType, err := gc.cache.Get(ctx, cacheKey)
+        if err == nil </span><span class="cov8" title="1">{
+                log.Printf("GeoIP check for %s: %s (from cache)", ip, cachedType)
+                return cachedType, nil
+        }</span>
+
+        // Используем реальный GeoIP API ipapi.is
+        <span class="cov8" title="1">ipType, err := gc.fetchFromGeoIPAPI(ip)
+        if err != nil </span><span class="cov8" title="1">{
+                log.Printf("Error fetching from GeoIP API: %v, using default classification", err)
+                // Fallback на классификацию по диапазонам
+                ipType = gc.classifyIP(ip)
+        }</span>
+
+        <span class="cov8" title="1">if err := gc.cache.Set(ctx, cacheKey, ipType, 24*time.Hour); err != nil </span><span class="cov0" title="0">{
+                log.Printf("Error caching GeoIP result: %v", err)
+        }</span>
+
+        <span class="cov8" title="1">log.Printf("GeoIP check for %s: %s", ip, ipType)
+        return ipType, nil</span>
+}
+
+// classifyIP классифицирует IP адрес на основе диапазонов (fallback)
+func (gc *GeoIPChecker) classifyIP(ip string) string <span class="cov8" title="1">{
+        // Известные диапазоны дата-центров (упрощенный список)
+        dcRanges := []string{
+                "8.8.",    // Google
+                "1.1.",    // Cloudflare
+                "208.67.", // OpenDNS
+                "9.9.",    // Quad9
+        }
+
+        for _, dcRange := range dcRanges </span><span class="cov8" title="1">{
+                if len(ip) &gt;= len(dcRange) &amp;&amp; ip[:len(dcRange)] == dcRange </span><span class="cov8" title="1">{
+                        return "datacenter"
+                }</span>
+        }
+
+        // Остальные - жилые IP
+        <span class="cov8" title="1">return "residential"</span>
+}
+
+// IPAPIResponse - ответ от ipapi.is
+type IPAPIResponse struct {
+        IP            string `json:"ip"`
+        IsDatacenter  bool   `json:"is_datacenter"`
+        IsVPN         bool   `json:"is_vpn"`
+        IsResidential bool   `json:"is_residential"`
+        Country       string `json:"country"`
+        CountryCode   string `json:"country_code"`
+        City          string `json:"city"`
+        Asn           int    `json:"asn"`
+        Organization  string `json:"organization"`
+        Hostname      string `json:"hostname"`
+}
+
+// fetchFromGeoIPAPI вызывает реальный GeoIP API (ipapi.is)
+func (gc *GeoIPChecker) fetchFromGeoIPAPI(ip string) (string, error) <span class="cov8" title="1">{
+        if gc.apiKey == "" || gc.apiURL == "" </span><span class="cov0" title="0">{
+                return gc.classifyIP(ip), nil
+        }</span>
+
+        // Формируем URL запроса для ipapi.is
+        <span class="cov8" title="1">url := fmt.Sprintf("%s?ip=%s&amp;key=%s", gc.apiURL, ip, gc.apiKey)
+
+        req, err := http.NewRequest("GET", url, nil)
+        if err != nil </span><span class="cov0" title="0">{
+                return "", err
+        }</span>
+
+        <span class="cov8" title="1">req.Header.Set("User-Agent", "VotingSystem/1.0")
+
+        resp, err := gc.client.Do(req)
+        if err != nil </span><span class="cov8" title="1">{
+                return "", err
+        }</span>
+        <span class="cov0" title="0">defer resp.Body.Close()
+
+        body, err := io.ReadAll(resp.Body)
+        if err != nil </span><span class="cov0" title="0">{
+                return "", err
+        }</span>
+
+        <span class="cov0" title="0">if resp.StatusCode != http.StatusOK </span><span class="cov0" title="0">{
+                log.Printf("GeoIP API returned status %d: %s", resp.StatusCode, string(body))
+                return "", fmt.Errorf("GeoIP API returned status %d", resp.StatusCode)
+        }</span>
+
+        <span class="cov0" title="0">var result IPAPIResponse
+        err = json.Unmarshal(body, &amp;result)
+        if err != nil </span><span class="cov0" title="0">{
+                log.Printf("Error unmarshaling GeoIP response: %v", err)
+                return "", err
+        }</span>
+
+        <span class="cov0" title="0">log.Printf("GeoIP API response for %s: datacenter=%v, vpn=%v, residential=%v", ip, result.IsDatacenter, result.IsVPN, result.IsResidential)
+
+        // Определяем тип IP на основе ответа API
+        if result.IsDatacenter </span><span class="cov0" title="0">{
+                return "datacenter", nil
+        }</span>
+        <span class="cov0" title="0">if result.IsVPN </span><span class="cov0" title="0">{
+                return "vpn", nil
+        }</span>
+        <span class="cov0" title="0">if result.IsResidential </span><span class="cov0" title="0">{
+                return "residential", nil
+        }</span>
+
+        // Если API не смог определить, используем fallback
+        <span class="cov0" title="0">return gc.classifyIP(ip), nil</span>
+}
+
+// isLocalIP проверяет, является ли IP локальным
+func isLocalIP(ip string) bool <span class="cov8" title="1">{
+        localRanges := []string{
+                "127.",     // localhost
+                "192.168.", // Private
+                "10.",      // Private
+                "172.16.",  // Private (172.16.0.0 - 172.31.255.255)
+                "172.17.",
+                "172.18.",
+                "172.19.",
+                "172.20.",
+                "172.21.",
+                "172.22.",
+                "172.23.",
+                "172.24.",
+                "172.25.",
+                "172.26.",
+                "172.27.",
+                "172.28.",
+                "172.29.",
+                "172.30.",
+                "172.31.",
+        }
+
+        for _, localRange := range localRanges </span><span class="cov8" title="1">{
+                if len(ip) &gt;= len(localRange) &amp;&amp; ip[:len(localRange)] == localRange </span><span class="cov8" title="1">{
+                        return true
+                }</span>
+        }
+
+        <span class="cov8" title="1">return false</span>
+}
+</pre>
+		
+		<pre class="file" id="file1" style="display: none">package antifraud
+
+import (
+        "context"
+        "fmt"
+        "log"
+        "time"
+)
+
+// RateLimiter ограничивает частоту голосов с одного IP
+type RateLimiter struct {
+        cache             CacheInterface
+        maxVotesPerMinute int
+        maxVotesPerHour   int
+        maxVotesPerDay    int
+}
+
+func NewRateLimiter(cache CacheInterface) *RateLimiter <span class="cov8" title="1">{
+        return &amp;RateLimiter{
+                cache:             cache,
+                maxVotesPerMinute: 5,
+                maxVotesPerHour:   50,
+                maxVotesPerDay:    200,
+        }
+}</span>
+
+// CheckLimit проверяет, не превышен ли лимит голосов с данного IP
+func (rl *RateLimiter) CheckLimit(ctx context.Context, ip string, pollID string) (bool, error) <span class="cov8" title="1">{
+        // Проверяем лимит за минуту
+        minuteKey := fmt.Sprintf("ratelimit:minute:%s:%s", ip, pollID)
+        minuteCount, err := rl.cache.GetInt(ctx, minuteKey)
+        if err != nil </span><span class="cov0" title="0">{
+                return false, err
+        }</span>
+
+        <span class="cov8" title="1">if minuteCount &gt;= int64(rl.maxVotesPerMinute) </span><span class="cov8" title="1">{
+                log.Printf("Rate limit exceeded for %s (minute limit)", ip)
+                return false, nil
+        }</span>
+
+        // Проверяем лимит за час
+        <span class="cov8" title="1">hourKey := fmt.Sprintf("ratelimit:hour:%s:%s", ip, pollID)
+        hourCount, err := rl.cache.GetInt(ctx, hourKey)
+        if err != nil </span><span class="cov0" title="0">{
+                return false, err
+        }</span>
+
+        <span class="cov8" title="1">if hourCount &gt;= int64(rl.maxVotesPerHour) </span><span class="cov0" title="0">{
+                log.Printf("Rate limit exceeded for %s (hour limit)", ip)
+                return false, nil
+        }</span>
+
+        // Проверяем лимит за день
+        <span class="cov8" title="1">dayKey := fmt.Sprintf("ratelimit:day:%s:%s", ip, pollID)
+        dayCount, err := rl.cache.GetInt(ctx, dayKey)
+        if err != nil </span><span class="cov0" title="0">{
+                return false, err
+        }</span>
+
+        <span class="cov8" title="1">if dayCount &gt;= int64(rl.maxVotesPerDay) </span><span class="cov0" title="0">{
+                log.Printf("Rate limit exceeded for %s (day limit)", ip)
+                return false, nil
+        }</span>
+
+        <span class="cov8" title="1">return true, nil</span>
+}
+
+// RecordVote записывает голос для ограничения частоты
+func (rl *RateLimiter) RecordVote(ctx context.Context, ip string, pollID string) error <span class="cov8" title="1">{
+        minuteKey := fmt.Sprintf("ratelimit:minute:%s:%s", ip, pollID)
+        hourKey := fmt.Sprintf("ratelimit:hour:%s:%s", ip, pollID)
+        dayKey := fmt.Sprintf("ratelimit:day:%s:%s", ip, pollID)
+
+        if _, err := rl.cache.Incr(ctx, minuteKey); err != nil </span><span class="cov0" title="0">{
+                return err
+        }</span>
+        <span class="cov8" title="1">if _, err := rl.cache.Incr(ctx, hourKey); err != nil </span><span class="cov0" title="0">{
+                return err
+        }</span>
+        <span class="cov8" title="1">if _, err := rl.cache.Incr(ctx, dayKey); err != nil </span><span class="cov0" title="0">{
+                return err
+        }</span>
+
+        <span class="cov8" title="1">if err := rl.cache.Expire(ctx, minuteKey, 1*time.Minute); err != nil </span><span class="cov0" title="0">{
+                return err
+        }</span>
+        <span class="cov8" title="1">if err := rl.cache.Expire(ctx, hourKey, 1*time.Hour); err != nil </span><span class="cov0" title="0">{
+                return err
+        }</span>
+        <span class="cov8" title="1">if err := rl.cache.Expire(ctx, dayKey, 24*time.Hour); err != nil </span><span class="cov0" title="0">{
+                return err
+        }</span>
+
+        <span class="cov8" title="1">return nil</span>
+}
+
+// ===================================
+
+// Deduplicator проверяет дублирующиеся голоса
+type Deduplicator struct {
+        cache CacheInterface
+}
+
+func NewDeduplicator(cache CacheInterface) *Deduplicator <span class="cov8" title="1">{
+        return &amp;Deduplicator{cache: cache}
+}</span>
+
+// HasVoted проверяет, голосовал ли данный IP в опросе
+func (d *Deduplicator) HasVoted(ctx context.Context, pollID string, ip string) (bool, error) <span class="cov8" title="1">{
+        setKey := fmt.Sprintf("votes:ips:%s", pollID)
+        return d.cache.SIsMember(ctx, setKey, ip)
+}</span>
+
+// RecordVote записывает IP как проголосовавший
+func (d *Deduplicator) RecordVote(ctx context.Context, pollID string, ip string) error <span class="cov8" title="1">{
+        setKey := fmt.Sprintf("votes:ips:%s", pollID)
+        err := d.cache.SAdd(ctx, setKey, ip)
+        if err != nil </span><span class="cov0" title="0">{
+                return err
+        }</span>
+
+        // Устанавливаем TTL для множества (полтора месяца)
+        <span class="cov8" title="1">return d.cache.Expire(ctx, setKey, 45*24*time.Hour)</span>
+}
+</pre>
+		
+		<pre class="file" id="file2" style="display: none">package antifraud
+
+import (
+        "context"
+        "errors"
+        "sync"
+        "time"
+)
+
+// CacheInterface определяет интерфейс для кэша
+type CacheInterface interface {
+        Get(ctx context.Context, key string) (string, error)
+        Set(ctx context.Context, key string, value interface{}, ttl time.Duration) error
+        GetInt(ctx context.Context, key string) (int64, error)
+        Incr(ctx context.Context, key string) (int64, error)
+        Del(ctx context.Context, keys ...string) error
+        SAdd(ctx context.Context, key string, members ...interface{}) error
+        SIsMember(ctx context.Context, key string, member interface{}) (bool, error)
+        Expire(ctx context.Context, key string, expiration time.Duration) error
+        IncrBy(ctx context.Context, key string, increment int64) (int64, error)
+        Close() error
+}
+
+// MockCache - мок Redis для тестирования
+type MockCache struct {
+        data sync.Map
+}
+
+func NewMockCache() *MockCache <span class="cov8" title="1">{
+        return &amp;MockCache{
+                data: sync.Map{},
+        }
+}</span>
+
+func (mc *MockCache) Get(ctx context.Context, key string) (string, error) <span class="cov8" title="1">{
+        val, ok := mc.data.Load(key)
+        if !ok </span><span class="cov8" title="1">{
+                return "", errors.New("key not found")
+        }</span>
+        <span class="cov8" title="1">return val.(string), nil</span>
+}
+
+func (mc *MockCache) Set(ctx context.Context, key string, value interface{}, ttl time.Duration) error <span class="cov8" title="1">{
+        mc.data.Store(key, value)
+        return nil
+}</span>
+
+func (mc *MockCache) GetInt(ctx context.Context, key string) (int64, error) <span class="cov8" title="1">{
+        val, ok := mc.data.Load(key)
+        if !ok </span><span class="cov8" title="1">{
+                return 0, nil
+        }</span>
+        <span class="cov8" title="1">return val.(int64), nil</span>
+}
+
+func (mc *MockCache) Incr(ctx context.Context, key string) (int64, error) <span class="cov8" title="1">{
+        val, ok := mc.data.Load(key)
+        if !ok </span><span class="cov8" title="1">{
+                mc.data.Store(key, int64(1))
+                return 1, nil
+        }</span>
+        <span class="cov8" title="1">newVal := val.(int64) + 1
+        mc.data.Store(key, newVal)
+        return newVal, nil</span>
+}
+
+func (mc *MockCache) Del(ctx context.Context, keys ...string) error <span class="cov8" title="1">{
+        for _, key := range keys </span><span class="cov8" title="1">{
+                mc.data.Delete(key)
+        }</span>
+        <span class="cov8" title="1">return nil</span>
+}
+
+func (mc *MockCache) SAdd(ctx context.Context, key string, members ...interface{}) error <span class="cov8" title="1">{
+        set, ok := mc.data.Load(key)
+        if !ok </span><span class="cov8" title="1">{
+                set = make(map[interface{}]bool)
+        }</span>
+        <span class="cov8" title="1">setMap := set.(map[interface{}]bool)
+        for _, member := range members </span><span class="cov8" title="1">{
+                setMap[member] = true
+        }</span>
+        <span class="cov8" title="1">mc.data.Store(key, setMap)
+        return nil</span>
+}
+
+func (mc *MockCache) SIsMember(ctx context.Context, key string, member interface{}) (bool, error) <span class="cov8" title="1">{
+        set, ok := mc.data.Load(key)
+        if !ok </span><span class="cov8" title="1">{
+                return false, nil
+        }</span>
+        <span class="cov8" title="1">return set.(map[interface{}]bool)[member], nil</span>
+}
+
+func (mc *MockCache) Expire(ctx context.Context, key string, expiration time.Duration) error <span class="cov8" title="1">{
+        // Mock doesn't handle expiration, just return nil
+        return nil
+}</span>
+
+func (mc *MockCache) IncrBy(ctx context.Context, key string, increment int64) (int64, error) <span class="cov8" title="1">{
+        val, ok := mc.data.Load(key)
+        if !ok </span><span class="cov8" title="1">{
+                mc.data.Store(key, increment)
+                return increment, nil
+        }</span>
+        <span class="cov8" title="1">newVal := val.(int64) + increment
+        mc.data.Store(key, newVal)
+        return newVal, nil</span>
+}
+
+func (mc *MockCache) Close() error <span class="cov8" title="1">{
+        return nil
+}</span>
+</pre>
+		
+		<pre class="file" id="file3" style="display: none">package antifraud
+
+import (
+        "context"
+        "encoding/json"
+        "fmt"
+        "log"
+        "time"
+        "voting-app/models"
+        "voting-app/repository"
+)
+
+// VoteProcessor обрабатывает голоса с проверками
+type VoteProcessor struct {
+        repo         repository.VoteProcessorRepository
+        cache        CacheInterface
+        geoipChecker *GeoIPChecker
+        rateLimiter  *RateLimiter
+        deduplicator *Deduplicator
+}
+
+func NewVoteProcessor(
+        repo repository.VoteProcessorRepository,
+        cache CacheInterface,
+        geoipChecker *GeoIPChecker,
+        rateLimiter *RateLimiter,
+        deduplicator *Deduplicator,
+) *VoteProcessor <span class="cov8" title="1">{
+        return &amp;VoteProcessor{
+                repo:         repo,
+                cache:        cache,
+                geoipChecker: geoipChecker,
+                rateLimiter:  rateLimiter,
+                deduplicator: deduplicator,
+        }
+}</span>
+
+// ProcessVote обрабатывает голос с полной цепочкой проверок
+func (vp *VoteProcessor) ProcessVote(ctx context.Context, vote *models.VoteEventMessage) (bool, string, error) <span class="cov8" title="1">{
+        log.Printf("Processing vote: Poll=%s, Option=%s, IP=%s", vote.PollID, vote.OptionID, vote.IP)
+
+        // 1. Проверка статуса опроса
+        status, err := vp.checkPollStatus(ctx, vote.PollID)
+        if err != nil </span><span class="cov8" title="1">{
+                return false, "Internal error checking poll status", err
+        }</span>
+
+        <span class="cov8" title="1">if status != "active" </span><span class="cov8" title="1">{
+                log.Printf("Poll %s is not active (status: %s)", vote.PollID, status)
+                return false, "Poll is not active", nil
+        }</span>
+
+        // 2. Проверка IP (GeoIP)
+        <span class="cov8" title="1">ipType, err := vp.geoipChecker.CheckIP(ctx, vote.IP)
+        if err != nil </span><span class="cov0" title="0">{
+                log.Printf("Error checking IP: %v", err)
+                return false, "Error checking IP", err
+        }</span>
+
+        <span class="cov8" title="1">if ipType != "residential" </span><span class="cov8" title="1">{
+                log.Printf("IP %s is not residential (type: %s)", vote.IP, ipType)
+                return false, fmt.Sprintf("IP type not allowed: %s", ipType), nil
+        }</span>
+
+        // 3. Проверка дедупликации (не голосовал ли уже)
+        <span class="cov8" title="1">hasVoted, err := vp.deduplicator.HasVoted(ctx, vote.PollID, vote.IP)
+        if err != nil </span><span class="cov0" title="0">{
+                log.Printf("Error checking if voted: %v", err)
+                return false, "Internal error", err
+        }</span>
+
+        <span class="cov8" title="1">if hasVoted </span><span class="cov8" title="1">{
+                log.Printf("IP %s already voted in poll %s", vote.IP, vote.PollID)
+                return false, "You have already voted in this poll", nil
+        }</span>
+
+        // 4. Проверка Rate Limiting
+        <span class="cov8" title="1">allowed, err := vp.rateLimiter.CheckLimit(ctx, vote.IP, vote.PollID)
+        if err != nil </span><span class="cov0" title="0">{
+                log.Printf("Error checking rate limit: %v", err)
+                return false, "Internal error", err
+        }</span>
+
+        <span class="cov8" title="1">if !allowed </span><span class="cov8" title="1">{
+                log.Printf("Rate limit exceeded for IP %s", vote.IP)
+                return false, "Rate limit exceeded", nil
+        }</span>
+
+        // 5. Запись голоса
+        <span class="cov8" title="1">err = vp.repo.RecordVote(vote.PollID, vote.OptionID, vote.IP)
+        if err != nil </span><span class="cov8" title="1">{
+                log.Printf("Error recording vote: %v", err)
+                return false, "Error recording vote", err
+        }</span>
+
+        // 6. Обновление счетчиков в Redis
+        <span class="cov8" title="1">err = vp.recordVoteInCache(ctx, vote.PollID, vote.OptionID, vote.IP)
+        if err != nil </span><span class="cov0" title="0">{
+                log.Printf("Error updating cache: %v", err)
+                // Не возвращаем ошибку, так как голос уже записан в БД
+        }</span>
+
+        // 7. Запись IP как проголосовавшего
+        <span class="cov8" title="1">err = vp.deduplicator.RecordVote(ctx, vote.PollID, vote.IP)
+        if err != nil </span><span class="cov0" title="0">{
+                log.Printf("Error recording vote in deduplicator: %v", err)
+        }</span>
+
+        // 8. Запись в Rate Limiter
+        <span class="cov8" title="1">err = vp.rateLimiter.RecordVote(ctx, vote.IP, vote.PollID)
+        if err != nil </span><span class="cov0" title="0">{
+                log.Printf("Error recording vote in rate limiter: %v", err)
+        }</span>
+
+        <span class="cov8" title="1">log.Printf("Vote successfully processed for poll %s", vote.PollID)
+        return true, "Vote recorded", nil</span>
+}
+
+// checkPollStatus проверяет статус опроса
+func (vp *VoteProcessor) checkPollStatus(ctx context.Context, pollID string) (string, error) <span class="cov8" title="1">{
+        // Пытаемся получить статус из кэша
+        cacheKey := "poll:status:" + pollID
+        status, err := vp.cache.Get(ctx, cacheKey)
+        if err == nil </span><span class="cov0" title="0">{
+                return status, nil
+        }</span>
+
+        // Если не в кэше, получаем из БД
+        <span class="cov8" title="1">poll, err := vp.repo.GetPoll(pollID)
+        if err != nil </span><span class="cov0" title="0">{
+                return "", err
+        }</span>
+
+        <span class="cov8" title="1">if poll == nil </span><span class="cov8" title="1">{
+                return "", fmt.Errorf("poll not found: %s", pollID)
+        }</span>
+
+        <span class="cov8" title="1">if err := vp.cache.Set(ctx, cacheKey, poll.Status, 24*time.Hour); err != nil </span><span class="cov0" title="0">{
+                log.Printf("Error caching poll status: %v", err)
+        }</span>
+
+        <span class="cov8" title="1">return poll.Status, nil</span>
+}
+
+// recordVoteInCache обновляет счетчики голосов в Redis
+func (vp *VoteProcessor) recordVoteInCache(ctx context.Context, pollID string, optionID string, ip string) error <span class="cov8" title="1">{
+        // Увеличиваем счетчик голосов для варианта
+        countKey := fmt.Sprintf("vote:count:%s", optionID)
+        _, err := vp.cache.Incr(ctx, countKey)
+        if err != nil </span><span class="cov0" title="0">{
+                return err
+        }</span>
+
+        <span class="cov8" title="1">if err := vp.cache.Expire(ctx, countKey, 45*24*time.Hour); err != nil </span><span class="cov0" title="0">{
+                return err
+        }</span>
+
+        <span class="cov8" title="1">return nil</span>
+}
+
+// GetVoteStatus возвращает статус голоса (для API)
+func (vp *VoteProcessor) GetVoteStatus(ctx context.Context, pollID string, ip string) map[string]interface{} <span class="cov8" title="1">{
+        hasVoted, _ := vp.deduplicator.HasVoted(ctx, pollID, ip)
+
+        return map[string]interface{}{
+                "poll_id":   pollID,
+                "ip":        ip,
+                "has_voted": hasVoted,
+        }
+}</span>
+
+// LogVoteEvent логирует событие голоса (для отладки)
+func (vp *VoteProcessor) LogVoteEvent(vote *models.VoteEventMessage) <span class="cov8" title="1">{
+        data, _ := json.MarshalIndent(vote, "", "  ")
+        log.Printf("Vote Event:\n%s", string(data))
+}</span>
+</pre>
+		
+		<pre class="file" id="file4" style="display: none">package cache
+
+import (
+        "context"
+        "fmt"
+        "log"
+        "time"
+
+        "github.com/redis/go-redis/v9"
+)
+
+type RedisCache struct {
+        client *redis.Client
+}
+
+func NewRedisCache(host, port string) (*RedisCache, error) <span class="cov0" title="0">{
+        addr := fmt.Sprintf("%s:%s", host, port)
+        client := redis.NewClient(&amp;redis.Options{
+                Addr: addr,
+        })
+
+        ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+        defer cancel()
+
+        err := client.Ping(ctx).Err()
+        if err != nil </span><span class="cov0" title="0">{
+                return nil, err
+        }</span>
+
+        <span class="cov0" title="0">log.Println("✓ Connected to Redis")
+        return &amp;RedisCache{client: client}, nil</span>
+}
+
+func (rc *RedisCache) Get(ctx context.Context, key string) (string, error) <span class="cov0" title="0">{
+        return rc.client.Get(ctx, key).Result()
+}</span>
+
+func (rc *RedisCache) Set(ctx context.Context, key string, value interface{}, expiration time.Duration) error <span class="cov0" title="0">{
+        return rc.client.Set(ctx, key, value, expiration).Err()
+}</span>
+
+func (rc *RedisCache) Del(ctx context.Context, keys ...string) error <span class="cov0" title="0">{
+        return rc.client.Del(ctx, keys...).Err()
+}</span>
+
+func (rc *RedisCache) Incr(ctx context.Context, key string) (int64, error) <span class="cov0" title="0">{
+        return rc.client.Incr(ctx, key).Result()
+}</span>
+
+func (rc *RedisCache) IncrBy(ctx context.Context, key string, increment int64) (int64, error) <span class="cov0" title="0">{
+        return rc.client.IncrBy(ctx, key, increment).Result()
+}</span>
+
+func (rc *RedisCache) GetInt(ctx context.Context, key string) (int64, error) <span class="cov0" title="0">{
+        val, err := rc.Get(ctx, key)
+        if err != nil </span><span class="cov0" title="0">{
+                if err == redis.Nil </span><span class="cov0" title="0">{
+                        return 0, nil
+                }</span>
+                <span class="cov0" title="0">return 0, err</span>
+        }
+
+        <span class="cov0" title="0">var result int64
+        _, err = fmt.Sscanf(val, "%d", &amp;result)
+        return result, err</span>
+}
+
+func (rc *RedisCache) SAdd(ctx context.Context, key string, members ...interface{}) error <span class="cov0" title="0">{
+        return rc.client.SAdd(ctx, key, members...).Err()
+}</span>
+
+func (rc *RedisCache) SIsMember(ctx context.Context, key string, member interface{}) (bool, error) <span class="cov0" title="0">{
+        return rc.client.SIsMember(ctx, key, member).Result()
+}</span>
+
+func (rc *RedisCache) Expire(ctx context.Context, key string, expiration time.Duration) error <span class="cov0" title="0">{
+        return rc.client.Expire(ctx, key, expiration).Err()
+}</span>
+
+func (rc *RedisCache) Close() error <span class="cov0" title="0">{
+        return rc.client.Close()
+}</span>
+</pre>
+		
+		<pre class="file" id="file5" style="display: none">package main
+
+import (
+        "context"
+        "encoding/json"
+        "log"
+        "os"
+        "os/signal"
+        "syscall"
+        "time"
+        "voting-app/antifraud"
+        "voting-app/cache"
+        "voting-app/config"
+        "voting-app/db"
+        "voting-app/models"
+        "voting-app/repository"
+
+        "github.com/nats-io/nats.go"
+)
+
+func main() <span class="cov0" title="0">{
+        log.Println("Starting Anti-Fraud Service...")
+
+        cfg := config.Load()
+
+        // Подключаемся к БД
+        database, err := db.Connect(cfg.DBHost, cfg.DBPort, cfg.DBUser, cfg.DBPassword, cfg.DBName)
+        if err != nil </span><span class="cov0" title="0">{
+                log.Fatalf("Failed to connect to database: %v", err)
+        }</span>
+        <span class="cov0" title="0">defer database.Close()
+
+        if err := db.InitSchema(database); err != nil </span><span class="cov0" title="0">{
+                log.Fatalf("Failed to init schema: %v", err)
+        }</span>
+
+        // Подключаемся к Redis
+        <span class="cov0" title="0">redisCache, err := cache.NewRedisCache(cfg.RedisHost, cfg.RedisPort)
+        if err != nil </span><span class="cov0" title="0">{
+                log.Fatalf("Failed to connect to Redis: %v", err)
+        }</span>
+        <span class="cov0" title="0">defer redisCache.Close()
+
+        // Подключаемся к NATS
+        nc, err := nats.Connect(cfg.NatsURL)
+        if err != nil </span><span class="cov0" title="0">{
+                log.Fatalf("Failed to connect to NATS: %v", err)
+        }</span>
+        <span class="cov0" title="0">defer nc.Close()
+
+        log.Println("✓ Connected to NATS")
+
+        // Инициализируем репозиторий
+        pollRepo := repository.NewPollRepository(database)
+
+        // Инициализируем компоненты Anti-Fraud
+        geoipChecker := antifraud.NewGeoIPChecker(redisCache, cfg.GeoIPAPIURL, cfg.GeoIPAPIKey)
+        rateLimiter := antifraud.NewRateLimiter(redisCache)
+        deduplicator := antifraud.NewDeduplicator(redisCache)
+        voteProcessor := antifraud.NewVoteProcessor(pollRepo, redisCache, geoipChecker, rateLimiter, deduplicator)
+
+        // Подписываемся на события голосования
+        sub, err := nc.QueueSubscribe("votes.new", "anti-fraud-group", func(msg *nats.Msg) </span><span class="cov0" title="0">{
+                ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+                defer cancel()
+
+                var voteEvent models.VoteEventMessage
+                err := json.Unmarshal(msg.Data, &amp;voteEvent)
+                if err != nil </span><span class="cov0" title="0">{
+                        log.Printf("Error unmarshaling vote event: %v", err)
+                        return
+                }</span>
+
+                <span class="cov0" title="0">log.Printf("Processing vote event: %+v", voteEvent)
+
+                // Обрабатываем голос
+                success, message, err := voteProcessor.ProcessVote(ctx, &amp;voteEvent)
+                if err != nil </span><span class="cov0" title="0">{
+                        log.Printf("Error processing vote: %v", err)
+                }</span>
+
+                <span class="cov0" title="0">if success </span><span class="cov0" title="0">{
+                        log.Printf("Vote processed successfully: %s", message)
+                }</span> else<span class="cov0" title="0"> {
+                        log.Printf("Vote rejected: %s", message)
+                }</span>
+        })
+
+        <span class="cov0" title="0">if err != nil </span><span class="cov0" title="0">{
+                log.Fatalf("Failed to subscribe: %v", err)
+        }</span>
+
+        <span class="cov0" title="0">log.Println("✓ Subscribed to votes.new")
+        log.Println("Anti-Fraud Service is running, waiting for vote events...")
+
+        // Настраиваем graceful shutdown
+        sigChan := make(chan os.Signal, 1)
+        signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+
+        sig := &lt;-sigChan
+        log.Printf("Received signal: %v", sig)
+        log.Println("Shutting down Anti-Fraud Service...")
+
+        // Отписываемся от NATS
+        err = sub.Unsubscribe()
+        if err != nil </span><span class="cov0" title="0">{
+                log.Printf("Error unsubscribing: %v", err)
+        }</span>
+
+        <span class="cov0" title="0">log.Println("✓ Anti-Fraud Service shutdown complete")</span>
+}
+</pre>
+		
+		<pre class="file" id="file6" style="display: none">package main
+
+import (
+        "context"
+        "encoding/json"
+        "log"
+        "net/http"
+        "os"
+        "os/signal"
+        "syscall"
+        "time"
+        "voting-app/cache"
+        "voting-app/config"
+        "voting-app/db"
+        "voting-app/handler"
+        "voting-app/models"
+        "voting-app/repository"
+        "voting-app/service"
+
+        "github.com/go-chi/chi/v5"
+        "github.com/nats-io/nats.go"
+)
+
+func main() <span class="cov0" title="0">{
+        log.Println("Starting Gateway Service...")
+
+        cfg := config.Load()
+
+        // Подключаемся к БД
+        database, err := db.Connect(cfg.DBHost, cfg.DBPort, cfg.DBUser, cfg.DBPassword, cfg.DBName)
+        if err != nil </span><span class="cov0" title="0">{
+                log.Fatalf("Failed to connect to database: %v", err)
+        }</span>
+        <span class="cov0" title="0">defer database.Close()
+
+        // Инициализируем схему БД
+        err = db.InitSchema(database)
+        if err != nil </span><span class="cov0" title="0">{
+                log.Fatalf("Failed to init schema: %v", err)
+        }</span>
+
+        // Подключаемся к Redis
+        <span class="cov0" title="0">redisCache, err := cache.NewRedisCache(cfg.RedisHost, cfg.RedisPort)
+        if err != nil </span><span class="cov0" title="0">{
+                log.Fatalf("Failed to connect to Redis: %v", err)
+        }</span>
+        <span class="cov0" title="0">defer redisCache.Close()
+
+        // Подключаемся к NATS
+        nc, err := nats.Connect(cfg.NatsURL)
+        if err != nil </span><span class="cov0" title="0">{
+                log.Fatalf("Failed to connect to NATS: %v", err)
+        }</span>
+        <span class="cov0" title="0">defer nc.Close()
+
+        log.Println("✓ Connected to NATS")
+
+        // Инициализируем репозиторий и сервис
+        pollRepo := repository.NewPollRepository(database)
+        pollService := service.NewPollService(pollRepo, redisCache)
+
+        // Инициализируем обработчик
+        gatewayHandler := handler.NewGatewayHandler(pollService)
+        gatewayHandler.SetVotePublisher(natsVotePublisher{conn: nc})
+
+        // Создаем маршруты
+        r := chi.NewRouter()
+
+        // Health check
+        r.Get("/health", gatewayHandler.Health)
+
+        // Опросы
+        r.Post("/polls", gatewayHandler.CreatePoll)
+        r.Get("/polls/{pollID}", gatewayHandler.GetPoll)
+        r.Get("/polls/{pollID}/results", gatewayHandler.GetResults)
+        r.Post("/polls/{pollID}/close", gatewayHandler.ClosePoll)
+
+        r.Post("/polls/{pollID}/vote", gatewayHandler.Vote)
+
+        r.Get("/polls/{pollID}/vote-status", gatewayHandler.GetVoteStatus)
+
+        // Создаем HTTP сервер
+        server := &amp;http.Server{
+                Addr:    ":" + cfg.GatewayPort,
+                Handler: r,
+        }
+
+        // Запускаем сервер в отдельной горутине
+        log.Printf("Gateway Service listening on port %s", cfg.GatewayPort)
+        go func() </span><span class="cov0" title="0">{
+                err := server.ListenAndServe()
+                if err != nil &amp;&amp; err != http.ErrServerClosed </span><span class="cov0" title="0">{
+                        log.Fatalf("Error starting server: %v", err)
+                }</span>
+        }()
+
+        // Настраиваем graceful shutdown
+        <span class="cov0" title="0">sigChan := make(chan os.Signal, 1)
+        signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+
+        sig := &lt;-sigChan
+        log.Printf("Received signal: %v", sig)
+        log.Println("Shutting down Gateway Service...")
+
+        // Даем серверу 10 секунд на graceful shutdown
+        ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+        defer cancel()
+
+        err = server.Shutdown(ctx)
+        if err != nil </span><span class="cov0" title="0">{
+                log.Printf("Error during server shutdown: %v", err)
+        }</span>
+
+        <span class="cov0" title="0">log.Println("✓ Gateway Service shutdown complete")</span>
+}
+
+type natsVotePublisher struct {
+        conn *nats.Conn
+}
+
+func (p natsVotePublisher) PublishVote(event models.VoteEventMessage) error <span class="cov0" title="0">{
+        eventData, err := json.Marshal(event)
+        if err != nil </span><span class="cov0" title="0">{
+                return err
+        }</span>
+
+        <span class="cov0" title="0">return p.conn.Publish("votes.new", eventData)</span>
+}
+</pre>
+		
+		<pre class="file" id="file7" style="display: none">package main
+
+import (
+        "context"
+        "database/sql"
+        "encoding/json"
+        "log"
+        "net/http"
+        "os"
+        "os/signal"
+        "syscall"
+        "time"
+        "voting-app/cache"
+        "voting-app/config"
+        "voting-app/db"
+        "voting-app/models"
+        "voting-app/repository"
+        "voting-app/service"
+
+        "github.com/go-chi/chi/v5"
+)
+
+func main() <span class="cov0" title="0">{
+        log.Println("Starting Poll Manager Service...")
+
+        cfg := config.Load()
+
+        // Подключаемся к БД
+        database, err := db.Connect(cfg.DBHost, cfg.DBPort, cfg.DBUser, cfg.DBPassword, cfg.DBName)
+        if err != nil </span><span class="cov0" title="0">{
+                log.Fatalf("Failed to connect to database: %v", err)
+        }</span>
+        <span class="cov0" title="0">defer database.Close()
+
+        if err := db.InitSchema(database); err != nil </span><span class="cov0" title="0">{
+                log.Fatalf("Failed to init schema: %v", err)
+        }</span>
+
+        // Подключаемся к Redis
+        <span class="cov0" title="0">redisCache, err := cache.NewRedisCache(cfg.RedisHost, cfg.RedisPort)
+        if err != nil </span><span class="cov0" title="0">{
+                log.Fatalf("Failed to connect to Redis: %v", err)
+        }</span>
+        <span class="cov0" title="0">defer redisCache.Close()
+
+        // Инициализируем репозиторий и сервис
+        pollRepo := repository.NewPollRepository(database)
+        pollService := service.NewPollService(pollRepo, redisCache)
+
+        // Создаем маршруты
+        r := chi.NewRouter()
+
+        // Health check
+        r.Get("/health", func(w http.ResponseWriter, r *http.Request) </span><span class="cov0" title="0">{
+                w.Header().Set("Content-Type", "application/json")
+                json.NewEncoder(w).Encode(map[string]interface{}{
+                        "status":  "ok",
+                        "service": "poll-manager",
+                })
+        }</span>)
+
+        // Получить опрос
+        <span class="cov0" title="0">r.Get("/polls/{pollID}", func(w http.ResponseWriter, r *http.Request) </span><span class="cov0" title="0">{
+                pollID := chi.URLParam(r, "pollID")
+
+                poll, err := pollService.GetPoll(pollID)
+                if err != nil </span><span class="cov0" title="0">{
+                        log.Printf("Error getting poll: %v", err)
+                        http.Error(w, "Error getting poll", http.StatusInternalServerError)
+                        return
+                }</span>
+
+                <span class="cov0" title="0">if poll == nil </span><span class="cov0" title="0">{
+                        http.Error(w, "Poll not found", http.StatusNotFound)
+                        return
+                }</span>
+
+                <span class="cov0" title="0">w.Header().Set("Content-Type", "application/json")
+                json.NewEncoder(w).Encode(poll)</span>
+        })
+
+        // Получить конфигурацию опроса
+        <span class="cov0" title="0">r.Get("/polls/{pollID}/config", func(w http.ResponseWriter, r *http.Request) </span><span class="cov0" title="0">{
+                pollID := chi.URLParam(r, "pollID")
+
+                config, err := pollService.GetPollConfig(pollID)
+                if err != nil </span><span class="cov0" title="0">{
+                        log.Printf("Error getting poll config: %v", err)
+                        http.Error(w, "Error getting poll config", http.StatusInternalServerError)
+                        return
+                }</span>
+
+                <span class="cov0" title="0">if config == nil </span><span class="cov0" title="0">{
+                        http.Error(w, "Poll not found", http.StatusNotFound)
+                        return
+                }</span>
+
+                <span class="cov0" title="0">w.Header().Set("Content-Type", "application/json")
+                json.NewEncoder(w).Encode(config)</span>
+        })
+
+        // Получить результаты
+        <span class="cov0" title="0">r.Get("/polls/{pollID}/results", func(w http.ResponseWriter, r *http.Request) </span><span class="cov0" title="0">{
+                pollID := chi.URLParam(r, "pollID")
+
+                results, err := pollService.GetResults(pollID)
+                if err != nil </span><span class="cov0" title="0">{
+                        log.Printf("Error getting results: %v", err)
+                        http.Error(w, "Error getting results", http.StatusInternalServerError)
+                        return
+                }</span>
+
+                <span class="cov0" title="0">if results == nil </span><span class="cov0" title="0">{
+                        http.Error(w, "Poll not found", http.StatusNotFound)
+                        return
+                }</span>
+
+                <span class="cov0" title="0">w.Header().Set("Content-Type", "application/json")
+                json.NewEncoder(w).Encode(results)</span>
+        })
+
+        // Создать опрос (внутренний API)
+        <span class="cov0" title="0">r.Post("/polls", func(w http.ResponseWriter, r *http.Request) </span><span class="cov0" title="0">{
+                var req models.CreatePollRequest
+
+                err := json.NewDecoder(r.Body).Decode(&amp;req)
+                if err != nil </span><span class="cov0" title="0">{
+                        http.Error(w, "Invalid request", http.StatusBadRequest)
+                        return
+                }</span>
+
+                <span class="cov0" title="0">if req.Title == "" || len(req.Options) == 0 </span><span class="cov0" title="0">{
+                        http.Error(w, "Title and options are required", http.StatusBadRequest)
+                        return
+                }</span>
+
+                <span class="cov0" title="0">resp, err := pollService.CreatePoll(req.Title, req.Options)
+                if err != nil </span><span class="cov0" title="0">{
+                        log.Printf("Error creating poll: %v", err)
+                        http.Error(w, "Error creating poll", http.StatusInternalServerError)
+                        return
+                }</span>
+
+                <span class="cov0" title="0">w.Header().Set("Content-Type", "application/json")
+                w.WriteHeader(http.StatusCreated)
+                json.NewEncoder(w).Encode(resp)</span>
+        })
+
+        // Закрыть опрос
+        <span class="cov0" title="0">r.Post("/polls/{pollID}/close", func(w http.ResponseWriter, r *http.Request) </span><span class="cov0" title="0">{
+                pollID := chi.URLParam(r, "pollID")
+
+                var req models.ClosePollRequest
+                err := json.NewDecoder(r.Body).Decode(&amp;req)
+                if err != nil </span><span class="cov0" title="0">{
+                        http.Error(w, "Invalid request", http.StatusBadRequest)
+                        return
+                }</span>
+
+                <span class="cov0" title="0">if req.AdminKey == "" </span><span class="cov0" title="0">{
+                        http.Error(w, "admin_key is required", http.StatusBadRequest)
+                        return
+                }</span>
+
+                <span class="cov0" title="0">err = pollService.ClosePoll(pollID, req.AdminKey)
+                if err != nil </span><span class="cov0" title="0">{
+                        if err == sql.ErrNoRows </span><span class="cov0" title="0">{
+                                http.Error(w, "Invalid admin key", http.StatusUnauthorized)
+                        }</span> else<span class="cov0" title="0"> {
+                                log.Printf("Error closing poll: %v", err)
+                                http.Error(w, "Error closing poll", http.StatusInternalServerError)
+                        }</span>
+                        <span class="cov0" title="0">return</span>
+                }
+
+                <span class="cov0" title="0">w.Header().Set("Content-Type", "application/json")
+                json.NewEncoder(w).Encode(map[string]interface{}{
+                        "success": true,
+                        "message": "Poll closed",
+                })</span>
+        })
+
+        // Создаем HTTP сервер
+        <span class="cov0" title="0">server := &amp;http.Server{
+                Addr:    ":" + cfg.PollManagerPort,
+                Handler: r,
+        }
+
+        // Запускаем сервер в отдельной горутине
+        log.Printf("Poll Manager Service listening on port %s", cfg.PollManagerPort)
+        go func() </span><span class="cov0" title="0">{
+                err := server.ListenAndServe()
+                if err != nil &amp;&amp; err != http.ErrServerClosed </span><span class="cov0" title="0">{
+                        log.Fatalf("Error starting server: %v", err)
+                }</span>
+        }()
+
+        // Настраиваем graceful shutdown
+        <span class="cov0" title="0">sigChan := make(chan os.Signal, 1)
+        signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+
+        sig := &lt;-sigChan
+        log.Printf("Received signal: %v", sig)
+        log.Println("Shutting down Poll Manager Service...")
+
+        // Даем серверу 10 секунд на graceful shutdown
+        ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+        defer cancel()
+
+        err = server.Shutdown(ctx)
+        if err != nil </span><span class="cov0" title="0">{
+                log.Printf("Error during server shutdown: %v", err)
+        }</span>
+
+        <span class="cov0" title="0">log.Println("✓ Poll Manager Service shutdown complete")</span>
+}
+</pre>
+		
+		<pre class="file" id="file8" style="display: none">package config
+
+import (
+        "os"
+)
+
+type Config struct {
+        // PostgreSQL
+        DBHost     string
+        DBPort     string
+        DBUser     string
+        DBPassword string
+        DBName     string
+
+        // Redis
+        RedisHost string
+        RedisPort string
+
+        // NATS
+        NatsURL string
+
+        // Gateway
+        GatewayPort string
+
+        // Poll Manager
+        PollManagerPort string
+
+        // Anti-Fraud
+        AntiFraudPort string
+
+        // GeoIP API
+        GeoIPAPIURL string
+        GeoIPAPIKey string
+
+        // Rate limits
+        RateLimitPerMinute int
+}
+
+func Load() *Config <span class="cov8" title="1">{
+        return &amp;Config{
+                // PostgreSQL
+                DBHost:     getEnv("DB_HOST", "localhost"),
+                DBPort:     getEnv("DB_PORT", "5432"),
+                DBUser:     getEnv("DB_USER", "postgres"),
+                DBPassword: getEnv("DB_PASSWORD", "postgres"),
+                DBName:     getEnv("DB_NAME", "voting"),
+
+                // Redis
+                RedisHost: getEnv("REDIS_HOST", "localhost"),
+                RedisPort: getEnv("REDIS_PORT", "6379"),
+
+                // NATS
+                NatsURL: getEnv("NATS_URL", "nats://localhost:4222"),
+
+                // Gateway
+                GatewayPort: getEnv("GATEWAY_PORT", "8001"),
+
+                // Poll Manager
+                PollManagerPort: getEnv("POLL_MANAGER_PORT", "8002"),
+
+                // Anti-Fraud
+                AntiFraudPort: getEnv("ANTI_FRAUD_PORT", "8003"),
+
+                // GeoIP API (mocked for demo)
+                GeoIPAPIURL: getEnv("GEOIP_API_URL", "https://ipqualityscore.com/api/json/ip"),
+                GeoIPAPIKey: getEnv("GEOIP_API_KEY", "demo"),
+
+                // Rate limits
+                RateLimitPerMinute: 60,
+        }
+}</span>
+
+func getEnv(key string, defaultValue string) string <span class="cov8" title="1">{
+        value := os.Getenv(key)
+        if value == "" </span><span class="cov8" title="1">{
+                return defaultValue
+        }</span>
+        <span class="cov8" title="1">return value</span>
+}
+</pre>
+		
+		<pre class="file" id="file9" style="display: none">package db
+
+import (
+        "database/sql"
+        "fmt"
+        "log"
+
+        _ "github.com/lib/pq"
+)
+
+func Connect(host, port, user, password, dbname string) (*sql.DB, error) <span class="cov0" title="0">{
+        psqlInfo := fmt.Sprintf("host=%s port=%s user=%s password=%s dbname=%s sslmode=disable",
+                host, port, user, password, dbname)
+
+        db, err := sql.Open("postgres", psqlInfo)
+        if err != nil </span><span class="cov0" title="0">{
+                return nil, err
+        }</span>
+
+        <span class="cov0" title="0">err = db.Ping()
+        if err != nil </span><span class="cov0" title="0">{
+                return nil, err
+        }</span>
+
+        <span class="cov0" title="0">log.Println("✓ Connected to PostgreSQL")
+        return db, nil</span>
+}
+
+// InitSchema создает таблицы
+func InitSchema(db *sql.DB) error <span class="cov8" title="1">{
+        schema := `
+        CREATE TABLE IF NOT EXISTS polls (
+                id VARCHAR(36) PRIMARY KEY,
+                title VARCHAR(255) NOT NULL,
+                admin_key VARCHAR(36) NOT NULL UNIQUE,
+                status VARCHAR(20) NOT NULL DEFAULT 'active',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                closed_at TIMESTAMP
+        );
+
+        CREATE TABLE IF NOT EXISTS options (
+                id VARCHAR(36) PRIMARY KEY,
+                poll_id VARCHAR(36) NOT NULL REFERENCES polls(id) ON DELETE CASCADE,
+                text VARCHAR(255) NOT NULL,
+                "order" INT NOT NULL,
+                UNIQUE(poll_id, "order")
+        );
+
+        CREATE TABLE IF NOT EXISTS votes (
+                id VARCHAR(36) PRIMARY KEY,
+                poll_id VARCHAR(36) NOT NULL REFERENCES polls(id) ON DELETE CASCADE,
+                option_id VARCHAR(36) NOT NULL REFERENCES options(id) ON DELETE CASCADE,
+                ip VARCHAR(45) NOT NULL,
+                voted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_polls_status ON polls(status);
+        CREATE INDEX IF NOT EXISTS idx_options_poll_id ON options(poll_id);
+        CREATE INDEX IF NOT EXISTS idx_votes_poll_id ON votes(poll_id);
+        CREATE INDEX IF NOT EXISTS idx_votes_ip ON votes(ip);
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_votes_poll_ip ON votes(poll_id, ip);
+        `
+
+        _, err := db.Exec(schema)
+        return err
+}</span>
+</pre>
+		
+		<pre class="file" id="file10" style="display: none">package handler
+
+import (
+        "encoding/json"
+        "log"
+        "net/http"
+        "voting-app/models"
+        "voting-app/service"
+
+        "github.com/go-chi/chi/v5"
+)
+
+type GatewayHandler struct {
+        pollService *service.PollService
+        publisher   VotePublisher
+}
+
+type VotePublisher interface {
+        PublishVote(event models.VoteEventMessage) error
+}
+
+func NewGatewayHandler(pollService *service.PollService) *GatewayHandler <span class="cov8" title="1">{
+        return &amp;GatewayHandler{
+                pollService: pollService,
+        }
+}</span>
+
+func (gh *GatewayHandler) SetVotePublisher(publisher VotePublisher) <span class="cov8" title="1">{
+        gh.publisher = publisher
+}</span>
+
+// CreatePoll обработчик для создания опроса
+func (gh *GatewayHandler) CreatePoll(w http.ResponseWriter, r *http.Request) <span class="cov8" title="1">{
+        var req models.CreatePollRequest
+
+        err := json.NewDecoder(r.Body).Decode(&amp;req)
+        if err != nil </span><span class="cov8" title="1">{
+                http.Error(w, "Invalid request", http.StatusBadRequest)
+                return
+        }</span>
+
+        <span class="cov8" title="1">if req.Title == "" || len(req.Options) == 0 </span><span class="cov8" title="1">{
+                http.Error(w, "Title and options are required", http.StatusBadRequest)
+                return
+        }</span>
+
+        <span class="cov8" title="1">resp, err := gh.pollService.CreatePoll(req.Title, req.Options)
+        if err != nil </span><span class="cov0" title="0">{
+                log.Printf("Error creating poll: %v", err)
+                http.Error(w, "Error creating poll", http.StatusInternalServerError)
+                return
+        }</span>
+
+        <span class="cov8" title="1">w.Header().Set("Content-Type", "application/json")
+        w.WriteHeader(http.StatusCreated)
+        json.NewEncoder(w).Encode(resp)</span>
+}
+
+// GetPoll обработчик для получения информации об опросе
+func (gh *GatewayHandler) GetPoll(w http.ResponseWriter, r *http.Request) <span class="cov8" title="1">{
+        pollID := chi.URLParam(r, "pollID")
+
+        poll, options, err := gh.pollService.GetPollWithOptions(pollID)
+        if err != nil </span><span class="cov0" title="0">{
+                log.Printf("Error getting poll: %v", err)
+                http.Error(w, "Error getting poll", http.StatusInternalServerError)
+                return
+        }</span>
+
+        <span class="cov8" title="1">if poll == nil </span><span class="cov8" title="1">{
+                http.Error(w, "Poll not found", http.StatusNotFound)
+                return
+        }</span>
+
+        // Возвращаем опрос с вариантами ответов
+        <span class="cov8" title="1">pollWithOptions := models.PollWithOptions{
+                ID:        poll.ID,
+                Title:     poll.Title,
+                Status:    poll.Status,
+                CreatedAt: poll.CreatedAt,
+                ClosedAt:  poll.ClosedAt,
+                Options:   options,
+        }
+
+        w.Header().Set("Content-Type", "application/json")
+        json.NewEncoder(w).Encode(pollWithOptions)</span>
+}
+
+// Vote обработчик для голосования
+func (gh *GatewayHandler) Vote(w http.ResponseWriter, r *http.Request) <span class="cov8" title="1">{
+        pollID := chi.URLParam(r, "pollID")
+
+        var req models.VoteRequest
+        err := json.NewDecoder(r.Body).Decode(&amp;req)
+        if err != nil </span><span class="cov8" title="1">{
+                http.Error(w, "Invalid request", http.StatusBadRequest)
+                return
+        }</span>
+
+        <span class="cov8" title="1">if req.OptionID == "" </span><span class="cov8" title="1">{
+                http.Error(w, "option_id is required", http.StatusBadRequest)
+                return
+        }</span>
+
+        // Получить IP адрес клиента
+        <span class="cov8" title="1">ip := GetClientIP(r)
+        log.Printf("Vote request from IP: %s for poll: %s, option: %s", ip, pollID, req.OptionID)
+
+        poll, err := gh.pollService.GetPoll(pollID)
+        if err != nil </span><span class="cov0" title="0">{
+                log.Printf("Error getting poll: %v", err)
+                http.Error(w, "Error checking poll", http.StatusInternalServerError)
+                return
+        }</span>
+        <span class="cov8" title="1">if poll == nil </span><span class="cov8" title="1">{
+                http.Error(w, "Poll not found", http.StatusNotFound)
+                return
+        }</span>
+        <span class="cov8" title="1">if poll.Status != "active" </span><span class="cov8" title="1">{
+                http.Error(w, "Poll is not active", http.StatusBadRequest)
+                return
+        }</span>
+
+        <span class="cov8" title="1">voteEvent := models.VoteEventMessage{
+                PollID:    pollID,
+                OptionID:  req.OptionID,
+                IP:        ip,
+                UserAgent: r.UserAgent(),
+        }
+        if gh.publisher != nil </span><span class="cov8" title="1">{
+                if err := gh.publisher.PublishVote(voteEvent); err != nil </span><span class="cov8" title="1">{
+                        log.Printf("Error publishing vote event: %v", err)
+                        http.Error(w, "Error publishing vote", http.StatusInternalServerError)
+                        return
+                }</span>
+        }
+
+        <span class="cov8" title="1">w.Header().Set("Content-Type", "application/json")
+        json.NewEncoder(w).Encode(models.VoteResponse{
+                Success: true,
+                Message: "Vote submitted for processing",
+        })</span>
+}
+
+// GetResults обработчик для получения результатов
+func (gh *GatewayHandler) GetResults(w http.ResponseWriter, r *http.Request) <span class="cov8" title="1">{
+        pollID := chi.URLParam(r, "pollID")
+
+        results, err := gh.pollService.GetResults(pollID)
+        if err != nil </span><span class="cov0" title="0">{
+                log.Printf("Error getting results: %v", err)
+                http.Error(w, "Error getting results", http.StatusInternalServerError)
+                return
+        }</span>
+
+        <span class="cov8" title="1">if results == nil </span><span class="cov8" title="1">{
+                http.Error(w, "Poll not found", http.StatusNotFound)
+                return
+        }</span>
+
+        <span class="cov8" title="1">w.Header().Set("Content-Type", "application/json")
+        json.NewEncoder(w).Encode(results)</span>
+}
+
+// ClosePoll обработчик для закрытия опроса
+func (gh *GatewayHandler) ClosePoll(w http.ResponseWriter, r *http.Request) <span class="cov8" title="1">{
+        pollID := chi.URLParam(r, "pollID")
+
+        var req models.ClosePollRequest
+        err := json.NewDecoder(r.Body).Decode(&amp;req)
+        if err != nil </span><span class="cov8" title="1">{
+                http.Error(w, "Invalid request", http.StatusBadRequest)
+                return
+        }</span>
+
+        <span class="cov8" title="1">if req.AdminKey == "" </span><span class="cov8" title="1">{
+                http.Error(w, "admin_key is required", http.StatusBadRequest)
+                return
+        }</span>
+
+        <span class="cov8" title="1">err = gh.pollService.ClosePoll(pollID, req.AdminKey)
+        if err != nil </span><span class="cov8" title="1">{
+                log.Printf("Error closing poll: %v", err)
+                http.Error(w, "Invalid admin key", http.StatusUnauthorized)
+                return
+        }</span>
+
+        <span class="cov8" title="1">w.Header().Set("Content-Type", "application/json")
+        json.NewEncoder(w).Encode(map[string]interface{}{
+                "success": true,
+                "message": "Poll closed",
+        })</span>
+}
+
+// GetVoteStatus обработчик для проверки статуса голоса
+func (gh *GatewayHandler) GetVoteStatus(w http.ResponseWriter, r *http.Request) <span class="cov8" title="1">{
+        pollID := chi.URLParam(r, "pollID")
+        ip := GetClientIP(r)
+
+        w.Header().Set("Content-Type", "application/json")
+        json.NewEncoder(w).Encode(map[string]interface{}{
+                "poll_id":   pollID,
+                "ip":        ip,
+                "has_voted": false, // Будет получаться из Anti-Fraud Service
+        })
+}</span>
+
+// Health обработчик для проверки здоровья сервиса
+func (gh *GatewayHandler) Health(w http.ResponseWriter, r *http.Request) <span class="cov8" title="1">{
+        w.Header().Set("Content-Type", "application/json")
+        json.NewEncoder(w).Encode(map[string]interface{}{
+                "status":  "ok",
+                "service": "gateway",
+        })
+}</span>
+</pre>
+		
+		<pre class="file" id="file11" style="display: none">package handler
+
+import (
+        "net"
+        "net/http"
+)
+
+// GetClientIP извлекает IP адрес клиента из запроса
+func GetClientIP(r *http.Request) string <span class="cov8" title="1">{
+        // Проверяем X-Forwarded-For (для прокси/балансировщиков)
+        forwarded := r.Header.Get("X-Forwarded-For")
+        if forwarded != "" </span><span class="cov8" title="1">{
+                return forwarded
+        }</span>
+
+        // Проверяем X-Real-IP
+        <span class="cov8" title="1">realIP := r.Header.Get("X-Real-IP")
+        if realIP != "" </span><span class="cov8" title="1">{
+                return realIP
+        }</span>
+
+        // Получаем из RemoteAddr
+        <span class="cov8" title="1">ip, _, err := net.SplitHostPort(r.RemoteAddr)
+        if err != nil </span><span class="cov8" title="1">{
+                return r.RemoteAddr
+        }</span>
+
+        <span class="cov8" title="1">return ip</span>
+}
+</pre>
+		
+		<pre class="file" id="file12" style="display: none">package repository
+
+import (
+        "database/sql"
+        "voting-app/models"
+
+        "github.com/google/uuid"
+)
+
+type PollRepository struct {
+        db *sql.DB
+}
+
+func NewPollRepository(db *sql.DB) *PollRepository <span class="cov8" title="1">{
+        return &amp;PollRepository{db: db}
+}</span>
+
+func (pr *PollRepository) CreatePoll(title string) (*models.Poll, error) <span class="cov8" title="1">{
+        pollID := uuid.New().String()
+        adminKey := uuid.New().String()
+
+        query := `
+                INSERT INTO polls (id, title, admin_key, status) 
+                VALUES ($1, $2, $3, 'active')
+                RETURNING id, title, admin_key, status, created_at
+        `
+
+        var poll models.Poll
+        err := pr.db.QueryRow(query, pollID, title, adminKey).
+                Scan(&amp;poll.ID, &amp;poll.Title, &amp;poll.AdminKey, &amp;poll.Status, &amp;poll.CreatedAt)
+
+        if err != nil </span><span class="cov0" title="0">{
+                return nil, err
+        }</span>
+
+        <span class="cov8" title="1">return &amp;poll, nil</span>
+}
+
+func (pr *PollRepository) GetPoll(pollID string) (*models.Poll, error) <span class="cov8" title="1">{
+        query := `
+                SELECT id, title, admin_key, status, created_at, closed_at 
+                FROM polls 
+                WHERE id = $1
+        `
+
+        var poll models.Poll
+        err := pr.db.QueryRow(query, pollID).
+                Scan(&amp;poll.ID, &amp;poll.Title, &amp;poll.AdminKey, &amp;poll.Status, &amp;poll.CreatedAt, &amp;poll.ClosedAt)
+
+        if err != nil </span><span class="cov8" title="1">{
+                if err == sql.ErrNoRows </span><span class="cov8" title="1">{
+                        return nil, nil
+                }</span>
+                <span class="cov0" title="0">return nil, err</span>
+        }
+
+        <span class="cov8" title="1">return &amp;poll, nil</span>
+}
+
+func (pr *PollRepository) ClosePoll(pollID string, adminKey string) error <span class="cov8" title="1">{
+        query := `
+                UPDATE polls 
+                SET status = 'closed', closed_at = CURRENT_TIMESTAMP
+                WHERE id = $1 AND admin_key = $2
+        `
+
+        result, err := pr.db.Exec(query, pollID, adminKey)
+        if err != nil </span><span class="cov0" title="0">{
+                return err
+        }</span>
+
+        <span class="cov8" title="1">rowsAffected, err := result.RowsAffected()
+        if err != nil </span><span class="cov0" title="0">{
+                return err
+        }</span>
+
+        <span class="cov8" title="1">if rowsAffected == 0 </span><span class="cov8" title="1">{
+                return sql.ErrNoRows
+        }</span>
+
+        <span class="cov8" title="1">return nil</span>
+}
+
+func (pr *PollRepository) AddOption(pollID string, text string, order int) (*models.Option, error) <span class="cov8" title="1">{
+        optionID := uuid.New().String()
+
+        query := `
+                INSERT INTO options (id, poll_id, text, "order") 
+                VALUES ($1, $2, $3, $4)
+                RETURNING id, poll_id, text, "order"
+        `
+
+        var option models.Option
+        err := pr.db.QueryRow(query, optionID, pollID, text, order).
+                Scan(&amp;option.ID, &amp;option.PollID, &amp;option.Text, &amp;option.Order)
+
+        if err != nil </span><span class="cov0" title="0">{
+                return nil, err
+        }</span>
+
+        <span class="cov8" title="1">return &amp;option, nil</span>
+}
+
+func (pr *PollRepository) GetOptions(pollID string) ([]*models.Option, error) <span class="cov8" title="1">{
+        query := `
+                SELECT id, poll_id, text, "order" 
+                FROM options 
+                WHERE poll_id = $1 
+                ORDER BY "order"
+        `
+
+        rows, err := pr.db.Query(query, pollID)
+        if err != nil </span><span class="cov0" title="0">{
+                return nil, err
+        }</span>
+        <span class="cov8" title="1">defer rows.Close()
+
+        var options []*models.Option
+        for rows.Next() </span><span class="cov8" title="1">{
+                var option models.Option
+                err := rows.Scan(&amp;option.ID, &amp;option.PollID, &amp;option.Text, &amp;option.Order)
+                if err != nil </span><span class="cov0" title="0">{
+                        return nil, err
+                }</span>
+                <span class="cov8" title="1">options = append(options, &amp;option)</span>
+        }
+
+        <span class="cov8" title="1">return options, rows.Err()</span>
+}
+
+func (pr *PollRepository) GetPollWithOptions(pollID string) (*models.PollWithOptions, error) <span class="cov8" title="1">{
+        poll, err := pr.GetPoll(pollID)
+        if err != nil </span><span class="cov0" title="0">{
+                return nil, err
+        }</span>
+
+        <span class="cov8" title="1">if poll == nil </span><span class="cov0" title="0">{
+                return nil, nil
+        }</span>
+
+        <span class="cov8" title="1">optionPtrs, err := pr.GetOptions(pollID)
+        if err != nil </span><span class="cov0" title="0">{
+                return nil, err
+        }</span>
+
+        <span class="cov8" title="1">options := make([]models.Option, len(optionPtrs))
+        for i, opt := range optionPtrs </span><span class="cov8" title="1">{
+                options[i] = *opt
+        }</span>
+
+        <span class="cov8" title="1">return &amp;models.PollWithOptions{
+                ID:        poll.ID,
+                Title:     poll.Title,
+                Status:    poll.Status,
+                CreatedAt: poll.CreatedAt,
+                ClosedAt:  poll.ClosedAt,
+                Options:   options,
+        }, nil</span>
+}
+
+func (pr *PollRepository) GetPollConfig(pollID string) (*models.Poll, error) <span class="cov0" title="0">{
+        return pr.GetPoll(pollID)
+}</span>
+
+func (pr *PollRepository) GetResults(pollID string) (*models.PollResults, error) <span class="cov8" title="1">{
+        poll, err := pr.GetPoll(pollID)
+        if err != nil </span><span class="cov0" title="0">{
+                return nil, err
+        }</span>
+
+        <span class="cov8" title="1">if poll == nil </span><span class="cov0" title="0">{
+                return nil, nil
+        }</span>
+
+        <span class="cov8" title="1">options, err := pr.GetOptions(pollID)
+        if err != nil </span><span class="cov0" title="0">{
+                return nil, err
+        }</span>
+
+        <span class="cov8" title="1">voteCounts, err := pr.GetVoteCounts(pollID)
+        if err != nil </span><span class="cov0" title="0">{
+                return nil, err
+        }</span>
+
+        <span class="cov8" title="1">results := make(map[string]models.PollOptionCount)
+        for _, option := range options </span><span class="cov8" title="1">{
+                results[option.ID] = models.PollOptionCount{
+                        Option: option.ID,
+                        Text:   option.Text,
+                        Count:  voteCounts[option.ID],
+                }
+        }</span>
+
+        <span class="cov8" title="1">return &amp;models.PollResults{
+                PollID:  poll.ID,
+                Title:   poll.Title,
+                Status:  poll.Status,
+                Results: results,
+        }, nil</span>
+}
+
+func (pr *PollRepository) RecordVote(pollID string, optionID string, ip string) error <span class="cov8" title="1">{
+        voteID := uuid.New().String()
+
+        query := `
+                INSERT INTO votes (id, poll_id, option_id, ip)
+                SELECT $1::VARCHAR(36), $2::VARCHAR(36), $3::VARCHAR(36), $4::VARCHAR(45)
+                WHERE EXISTS (
+                        SELECT 1
+                        FROM options
+                        WHERE id = $3::VARCHAR(36) AND poll_id = $2::VARCHAR(36)
+                )
+        `
+
+        result, err := pr.db.Exec(query, voteID, pollID, optionID, ip)
+        if err != nil </span><span class="cov0" title="0">{
+                return err
+        }</span>
+
+        <span class="cov8" title="1">rowsAffected, err := result.RowsAffected()
+        if err != nil </span><span class="cov0" title="0">{
+                return err
+        }</span>
+        <span class="cov8" title="1">if rowsAffected == 0 </span><span class="cov8" title="1">{
+                return sql.ErrNoRows
+        }</span>
+
+        <span class="cov8" title="1">return nil</span>
+}
+
+func (pr *PollRepository) GetVoteCounts(pollID string) (map[string]int64, error) <span class="cov8" title="1">{
+        query := `
+                SELECT option_id, COUNT(*) as count 
+                FROM votes 
+                WHERE poll_id = $1 
+                GROUP BY option_id
+        `
+
+        rows, err := pr.db.Query(query, pollID)
+        if err != nil </span><span class="cov0" title="0">{
+                return nil, err
+        }</span>
+        <span class="cov8" title="1">defer rows.Close()
+
+        counts := make(map[string]int64)
+        for rows.Next() </span><span class="cov8" title="1">{
+                var optionID string
+                var count int64
+                err := rows.Scan(&amp;optionID, &amp;count)
+                if err != nil </span><span class="cov0" title="0">{
+                        return nil, err
+                }</span>
+                <span class="cov8" title="1">counts[optionID] = count</span>
+        }
+
+        <span class="cov8" title="1">return counts, rows.Err()</span>
+}
+
+func (pr *PollRepository) GetVote(pollID string, ip string) (*models.Vote, error) <span class="cov8" title="1">{
+        query := `
+                SELECT id, poll_id, option_id, ip, voted_at
+                FROM votes
+                WHERE poll_id = $1 AND ip = $2
+                ORDER BY voted_at DESC
+                LIMIT 1
+        `
+
+        var vote models.Vote
+        err := pr.db.QueryRow(query, pollID, ip).
+                Scan(&amp;vote.ID, &amp;vote.PollID, &amp;vote.OptionID, &amp;vote.IP, &amp;vote.VotedAt)
+
+        if err != nil </span><span class="cov8" title="1">{
+                if err == sql.ErrNoRows </span><span class="cov8" title="1">{
+                        return nil, nil
+                }</span>
+                <span class="cov0" title="0">return nil, err</span>
+        }
+
+        <span class="cov8" title="1">return &amp;vote, nil</span>
+}
+</pre>
+		
+		<pre class="file" id="file13" style="display: none">package service
+
+import (
+        "database/sql"
+        "errors"
+        "sync"
+        "voting-app/models"
+)
+
+// MockPollRepository - мок для PollRepository
+type MockPollRepository struct {
+        polls   map[string]*models.Poll
+        options map[string][]*models.Option
+        votes   map[string][]*models.Vote
+        mu      sync.RWMutex
+}
+
+func NewMockPollRepository() *MockPollRepository <span class="cov8" title="1">{
+        return &amp;MockPollRepository{
+                polls:   make(map[string]*models.Poll),
+                options: make(map[string][]*models.Option),
+                votes:   make(map[string][]*models.Vote),
+        }
+}</span>
+
+func (mpr *MockPollRepository) CreatePoll(title string) (*models.Poll, error) <span class="cov8" title="1">{
+        mpr.mu.Lock()
+        defer mpr.mu.Unlock()
+
+        poll := &amp;models.Poll{
+                ID:       "test-poll-" + title,
+                Title:    title,
+                AdminKey: "admin-key",
+                Status:   "active",
+        }
+
+        mpr.polls[poll.ID] = poll
+        return poll, nil
+}</span>
+
+func (mpr *MockPollRepository) GetPoll(pollID string) (*models.Poll, error) <span class="cov8" title="1">{
+        mpr.mu.RLock()
+        defer mpr.mu.RUnlock()
+
+        poll, ok := mpr.polls[pollID]
+        if !ok </span><span class="cov8" title="1">{
+                return nil, nil
+        }</span>
+        <span class="cov8" title="1">return poll, nil</span>
+}
+
+func (mpr *MockPollRepository) GetPollWithOptions(pollID string) (*models.PollWithOptions, error) <span class="cov0" title="0">{
+        mpr.mu.RLock()
+        defer mpr.mu.RUnlock()
+
+        poll, ok := mpr.polls[pollID]
+        if !ok </span><span class="cov0" title="0">{
+                return nil, nil
+        }</span>
+
+        <span class="cov0" title="0">optionPtrs := mpr.options[pollID]
+        // Конвертируем *models.Option в models.Option
+        options := make([]models.Option, len(optionPtrs))
+        for i, opt := range optionPtrs </span><span class="cov0" title="0">{
+                options[i] = *opt
+        }</span>
+
+        <span class="cov0" title="0">return &amp;models.PollWithOptions{
+                ID:        poll.ID,
+                Title:     poll.Title,
+                Status:    poll.Status,
+                CreatedAt: poll.CreatedAt,
+                ClosedAt:  poll.ClosedAt,
+                Options:   options,
+        }, nil</span>
+}
+
+func (mpr *MockPollRepository) ClosePoll(pollID string, adminKey string) error <span class="cov8" title="1">{
+        mpr.mu.Lock()
+        defer mpr.mu.Unlock()
+
+        poll, ok := mpr.polls[pollID]
+        if !ok </span><span class="cov0" title="0">{
+                return sql.ErrNoRows
+        }</span>
+
+        <span class="cov8" title="1">if poll.AdminKey != adminKey </span><span class="cov8" title="1">{
+                return sql.ErrNoRows
+        }</span>
+
+        <span class="cov8" title="1">poll.Status = "closed"
+        return nil</span>
+}
+
+func (mpr *MockPollRepository) AddOption(pollID string, text string, order int) (*models.Option, error) <span class="cov8" title="1">{
+        mpr.mu.Lock()
+        defer mpr.mu.Unlock()
+
+        option := &amp;models.Option{
+                ID:     "opt-" + text,
+                PollID: pollID,
+                Text:   text,
+                Order:  order,
+        }
+
+        mpr.options[pollID] = append(mpr.options[pollID], option)
+        return option, nil
+}</span>
+
+func (mpr *MockPollRepository) GetOptions(pollID string) ([]*models.Option, error) <span class="cov8" title="1">{
+        mpr.mu.RLock()
+        defer mpr.mu.RUnlock()
+
+        opts, ok := mpr.options[pollID]
+        if !ok </span><span class="cov8" title="1">{
+                return []*models.Option{}, nil
+        }</span>
+        <span class="cov8" title="1">return opts, nil</span>
+}
+
+func (mpr *MockPollRepository) GetPollConfig(pollID string) (*models.Poll, error) <span class="cov0" title="0">{
+        return mpr.GetPoll(pollID)
+}</span>
+
+func (mpr *MockPollRepository) GetResults(pollID string) (*models.PollResults, error) <span class="cov0" title="0">{
+        mpr.mu.RLock()
+        defer mpr.mu.RUnlock()
+
+        poll, ok := mpr.polls[pollID]
+        if !ok </span><span class="cov0" title="0">{
+                return nil, nil
+        }</span>
+
+        <span class="cov0" title="0">results := &amp;models.PollResults{
+                PollID:  poll.ID,
+                Title:   poll.Title,
+                Status:  poll.Status,
+                Results: make(map[string]models.PollOptionCount),
+        }
+
+        // Подсчитываем голоса
+        voteCount := make(map[string]int64)
+        for _, vote := range mpr.votes[pollID] </span><span class="cov0" title="0">{
+                voteCount[vote.OptionID]++
+        }</span>
+
+        // Добавляем результаты
+        <span class="cov0" title="0">for _, option := range mpr.options[pollID] </span><span class="cov0" title="0">{
+                results.Results[option.ID] = models.PollOptionCount{
+                        Option: option.ID,
+                        Text:   option.Text,
+                        Count:  voteCount[option.ID],
+                }
+        }</span>
+
+        <span class="cov0" title="0">return results, nil</span>
+}
+
+func (mpr *MockPollRepository) GetVoteCounts(pollID string) (map[string]int64, error) <span class="cov8" title="1">{
+        mpr.mu.RLock()
+        defer mpr.mu.RUnlock()
+
+        voteCount := make(map[string]int64)
+        for _, vote := range mpr.votes[pollID] </span><span class="cov8" title="1">{
+                voteCount[vote.OptionID]++
+        }</span>
+
+        <span class="cov8" title="1">return voteCount, nil</span>
+}
+
+func (mpr *MockPollRepository) RecordVote(pollID string, optionID string, ip string) error <span class="cov8" title="1">{
+        mpr.mu.Lock()
+        defer mpr.mu.Unlock()
+
+        vote := &amp;models.Vote{
+                ID:       "vote-" + ip + "-" + optionID,
+                PollID:   pollID,
+                OptionID: optionID,
+                IP:       ip,
+        }
+
+        mpr.votes[pollID] = append(mpr.votes[pollID], vote)
+        return nil
+}</span>
+
+func (mpr *MockPollRepository) GetVote(pollID string, ip string) (*models.Vote, error) <span class="cov0" title="0">{
+        mpr.mu.RLock()
+        defer mpr.mu.RUnlock()
+
+        for _, vote := range mpr.votes[pollID] </span><span class="cov0" title="0">{
+                if vote.IP == ip </span><span class="cov0" title="0">{
+                        return vote, nil
+                }</span>
+        }
+        <span class="cov0" title="0">return nil, errors.New("vote not found")</span>
+}
+</pre>
+		
+		<pre class="file" id="file14" style="display: none">package service
+
+import (
+        "context"
+        "encoding/json"
+        "log"
+        "time"
+        "voting-app/antifraud"
+        "voting-app/models"
+        "voting-app/repository"
+)
+
+type PollService struct {
+        repo  repository.PollServiceRepository
+        cache antifraud.CacheInterface
+}
+
+func NewPollService(repo repository.PollServiceRepository, cache antifraud.CacheInterface) *PollService <span class="cov8" title="1">{
+        return &amp;PollService{repo: repo, cache: cache}
+}</span>
+
+func (ps *PollService) CreatePoll(title string, options []string) (*models.CreatePollResponse, error) <span class="cov8" title="1">{
+        poll, err := ps.repo.CreatePoll(title)
+        if err != nil </span><span class="cov8" title="1">{
+                return nil, err
+        }</span>
+
+        // Добавить варианты ответов
+        <span class="cov8" title="1">for i, optionText := range options </span><span class="cov8" title="1">{
+                _, err := ps.repo.AddOption(poll.ID, optionText, i+1)
+                if err != nil </span><span class="cov8" title="1">{
+                        log.Printf("Error adding option: %v", err)
+                        return nil, err
+                }</span>
+        }
+
+        // Кэшировать статус опроса в Redis
+        <span class="cov8" title="1">ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+        defer cancel()
+
+        cacheKey := "poll:status:" + poll.ID
+        err = ps.cache.Set(ctx, cacheKey, "active", 24*time.Hour)
+        if err != nil </span><span class="cov0" title="0">{
+                log.Printf("Error caching poll status: %v", err)
+        }</span>
+
+        <span class="cov8" title="1">return &amp;models.CreatePollResponse{
+                ID:       poll.ID,
+                AdminKey: poll.AdminKey,
+                Title:    poll.Title,
+        }, nil</span>
+}
+
+func (ps *PollService) GetPoll(pollID string) (*models.Poll, error) <span class="cov8" title="1">{
+        return ps.repo.GetPoll(pollID)
+}</span>
+
+func (ps *PollService) GetPollStatus(pollID string) (string, error) <span class="cov8" title="1">{
+        ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+        defer cancel()
+
+        cacheKey := "poll:status:" + pollID
+
+        // Пытаемся получить из кэша
+        status, err := ps.cache.Get(ctx, cacheKey)
+        if err == nil </span><span class="cov8" title="1">{
+                return status, nil
+        }</span>
+
+        // Если не в кэше, получаем из БД
+        <span class="cov8" title="1">poll, err := ps.repo.GetPoll(pollID)
+        if err != nil </span><span class="cov8" title="1">{
+                return "", err
+        }</span>
+
+        <span class="cov8" title="1">if poll == nil </span><span class="cov8" title="1">{
+                return "", nil
+        }</span>
+
+        <span class="cov8" title="1">if err := ps.cache.Set(ctx, cacheKey, poll.Status, 24*time.Hour); err != nil </span><span class="cov0" title="0">{
+                log.Printf("Error caching poll status: %v", err)
+        }</span>
+
+        <span class="cov8" title="1">return poll.Status, nil</span>
+}
+
+func (ps *PollService) ClosePoll(pollID string, adminKey string) error <span class="cov8" title="1">{
+        err := ps.repo.ClosePoll(pollID, adminKey)
+        if err != nil </span><span class="cov8" title="1">{
+                return err
+        }</span>
+
+        // Обновить кэш
+        <span class="cov8" title="1">ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+        defer cancel()
+
+        cacheKey := "poll:status:" + pollID
+        if err := ps.cache.Set(ctx, cacheKey, "closed", 24*time.Hour); err != nil </span><span class="cov0" title="0">{
+                log.Printf("Error caching closed poll status: %v", err)
+        }</span>
+
+        <span class="cov8" title="1">return nil</span>
+}
+
+func (ps *PollService) GetResults(pollID string) (*models.PollResults, error) <span class="cov8" title="1">{
+        poll, err := ps.repo.GetPoll(pollID)
+        if err != nil </span><span class="cov8" title="1">{
+                return nil, err
+        }</span>
+
+        <span class="cov8" title="1">if poll == nil </span><span class="cov8" title="1">{
+                return nil, nil
+        }</span>
+
+        <span class="cov8" title="1">options, err := ps.repo.GetOptions(pollID)
+        if err != nil </span><span class="cov8" title="1">{
+                return nil, err
+        }</span>
+
+        // Получить счеты из Redis для быстрого ответа
+        <span class="cov8" title="1">ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+        defer cancel()
+
+        results := make(map[string]models.PollOptionCount)
+        var voteCounts map[string]int64
+
+        getVoteCounts := func() map[string]int64 </span><span class="cov8" title="1">{
+                if voteCounts != nil </span><span class="cov8" title="1">{
+                        return voteCounts
+                }</span>
+
+                <span class="cov8" title="1">counts, err := ps.repo.GetVoteCounts(pollID)
+                if err != nil </span><span class="cov0" title="0">{
+                        log.Printf("Error getting vote counts from repository: %v", err)
+                        voteCounts = map[string]int64{}
+                        return voteCounts
+                }</span>
+
+                <span class="cov8" title="1">voteCounts = counts
+                return voteCounts</span>
+        }
+
+        <span class="cov8" title="1">for _, option := range options </span><span class="cov8" title="1">{
+                countKey := "vote:count:" + option.ID
+                count, err := ps.cache.GetInt(ctx, countKey)
+                if err != nil </span><span class="cov0" title="0">{
+                        log.Printf("Error getting count from cache: %v", err)
+                        count = getVoteCounts()[option.ID]
+                }</span> else<span class="cov8" title="1"> if count == 0 </span><span class="cov8" title="1">{
+                        if dbCount := getVoteCounts()[option.ID]; dbCount &gt; 0 </span><span class="cov0" title="0">{
+                                count = dbCount
+                        }</span>
+                }
+
+                <span class="cov8" title="1">results[option.ID] = models.PollOptionCount{
+                        Option: option.ID,
+                        Text:   option.Text,
+                        Count:  count,
+                }</span>
+        }
+
+        <span class="cov8" title="1">return &amp;models.PollResults{
+                PollID:  poll.ID,
+                Title:   poll.Title,
+                Status:  poll.Status,
+                Results: results,
+        }, nil</span>
+}
+
+func (ps *PollService) GetPollWithOptions(pollID string) (*models.Poll, []models.Option, error) <span class="cov8" title="1">{
+        poll, err := ps.repo.GetPoll(pollID)
+        if err != nil </span><span class="cov8" title="1">{
+                return nil, nil, err
+        }</span>
+
+        <span class="cov8" title="1">if poll == nil </span><span class="cov8" title="1">{
+                return nil, nil, nil
+        }</span>
+
+        <span class="cov8" title="1">optionPtrs, err := ps.repo.GetOptions(pollID)
+        if err != nil </span><span class="cov8" title="1">{
+                return nil, nil, err
+        }</span>
+
+        // Конвертируем []*models.Option в []models.Option
+        <span class="cov8" title="1">options := make([]models.Option, len(optionPtrs))
+        for i, opt := range optionPtrs </span><span class="cov8" title="1">{
+                options[i] = *opt
+        }</span>
+
+        <span class="cov8" title="1">return poll, options, nil</span>
+}
+
+// GetPollConfig возвращает конфигурацию опроса для сервиса Anti-Fraud
+func (ps *PollService) GetPollConfig(pollID string) (map[string]interface{}, error) <span class="cov8" title="1">{
+        poll, options, err := ps.GetPollWithOptions(pollID)
+        if err != nil </span><span class="cov8" title="1">{
+                return nil, err
+        }</span>
+
+        <span class="cov8" title="1">if poll == nil </span><span class="cov8" title="1">{
+                return nil, nil
+        }</span>
+
+        <span class="cov8" title="1">optionsList := make([]map[string]interface{}, len(options))
+        for i, opt := range options </span><span class="cov8" title="1">{
+                optionsList[i] = map[string]interface{}{
+                        "id":   opt.ID,
+                        "text": opt.Text,
+                }
+        }</span>
+
+        <span class="cov8" title="1">return map[string]interface{}{
+                "id":      poll.ID,
+                "title":   poll.Title,
+                "status":  poll.Status,
+                "options": optionsList,
+                "created": poll.CreatedAt,
+        }, nil</span>
+}
+
+// CachePollConfig кэширует конфигурацию опроса
+func (ps *PollService) CachePollConfig(pollID string) error <span class="cov8" title="1">{
+        config, err := ps.GetPollConfig(pollID)
+        if err != nil </span><span class="cov8" title="1">{
+                return err
+        }</span>
+        <span class="cov8" title="1">if config == nil </span><span class="cov0" title="0">{
+                return nil
+        }</span>
+
+        <span class="cov8" title="1">ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+        defer cancel()
+
+        data, err := json.Marshal(config)
+        if err != nil </span><span class="cov0" title="0">{
+                return err
+        }</span>
+
+        <span class="cov8" title="1">cacheKey := "poll:config:" + pollID
+        return ps.cache.Set(ctx, cacheKey, string(data), 24*time.Hour)</span>
+}
+</pre>
+		
+		</div>
+	</body>
+	<script>
+	(function() {
+		var files = document.getElementById('files');
+		var visible;
+		files.addEventListener('change', onChange, false);
+		function select(part) {
+			if (visible)
+				visible.style.display = 'none';
+			visible = document.getElementById(part);
+			if (!visible)
+				return;
+			files.value = part;
+			visible.style.display = 'block';
+			location.hash = part;
+		}
+		function onChange() {
+			select(files.value);
+			window.scrollTo(0, 0);
+		}
+		if (location.hash != "") {
+			select(location.hash.substr(1));
+		}
+		if (!visible) {
+			select("file0");
+		}
+	})();
+	</script>
+</html>
